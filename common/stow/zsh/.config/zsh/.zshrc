@@ -30,12 +30,12 @@ plug "hlissner/zsh-autopair"
 plug "MichaelAquilina/zsh-you-should-use"
 plug "zap-zsh/fzf"
 
-# My commands
-plug "$HOME/.config/shell/commands.sh"
-
 # Per-tool init (interactive-only)
 plug "$HOME/.config/zsh/bun.zsh"
 plug "$HOME/.config/zsh/mamba.zsh"
+
+# My commands (mise activation stays after tools that modify PATH)
+plug "$HOME/.config/shell/commands.sh"
 
 # Widget wrappers load last — syntax-highlighting must be the final plugin
 # sourced (its own README), and autosuggestions has to sit after fzf-tab.
@@ -53,4 +53,14 @@ zstyle ':fzf-tab:*' switch-group '<' '>'             # cycle completion groups
 if (( $+commands[eza] )); then
     zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza -1 --icons=auto --color=always $realpath'
     zstyle ':fzf-tab:complete:z:*'  fzf-preview 'eza -1 --icons=auto --color=always $realpath'
+fi
+
+# Keep each Herdr agent row labeled with the folder its shell launched from.
+if [[ -n ${HERDR_PANE_ID:-} ]] && (( $+commands[herdr] )); then
+    autoload -Uz add-zsh-hook
+    _herdr_report_directory() {
+        herdr pane report-metadata "$HERDR_PANE_ID" \
+            --source zfiles-cwd --token "directory=${PWD:t}" >/dev/null 2>&1
+    }
+    add-zsh-hook precmd _herdr_report_directory
 fi
