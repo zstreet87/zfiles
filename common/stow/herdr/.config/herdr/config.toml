@@ -75,6 +75,13 @@ pane_gaps    = false            # zen: no spacing between panes
 # and herdr persists that state in session.json across restarts.
 sidebar_collapsed_mode = "hidden"
 
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "workspace", "tab"],
+  ["agent"],
+  [{ token = "$directory", dim = true }],
+]
+
 [ui.sound]
 enabled = false                 # no bell on agent state change
 
