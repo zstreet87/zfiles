@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# obsidian-render — render an Obsidian note through Quarto.
+#
+#   obsidian-render note.md                 # PDF
+#   obsidian-render note.md --to tex        # .tex for arXiv or a journal
+#   obsidian-render note.md --to html
+#   obsidian-render note.md --preview       # live reload while you edit
+#   obsidian-render note.md --paper         # scholarly preamble for a loose note
+#
+# THIS IS A CONVENIENCE WRAPPER, NOT A CONVERTER.
+#
+# It used to be a converter: ~400 lines normalizing Obsidian syntax into Pandoc
+# syntax with regexes before handing the result to Quarto. That design was
+# wrong. Every rule in it was a regex over prose, and LaTeX is made of the same
+# characters those regexes look for -- `==` is a highlight and a comparison,
+# `^` is a block id and a superscript, `[[ ]]` is a wikilink and a bracket
+# matrix -- so it could corrupt a formula, and the damage showed up as a LaTeX
+# error nowhere near the cause.
+#
+# The work now happens where it cannot do that: a Pandoc Lua filter, which runs
+# AFTER parsing, on the syntax tree, where math is a Math node and unreachable.
+# See _extensions/obsidian/obsidian.lua in the vault template.
+#
+# Which means a vault scaffolded by new-research-project needs nothing from
+# this script at all:
+#
+#     quarto render notes/paper.md --to pdf
+#     quarto preview notes/paper.md
+#
+# both work directly, because the vault's _quarto.yml sets the reader
+# extensions and loads the filter. What is left here is the two cases Quarto
+# alone does not cover: a note OUTSIDE any vault project, and remembering the
+# flags.
+set -uo pipefail
+
+die() { echo "obsidian-render: $*" >&2; exit 1; }
+
+FILTER="${XDG_DATA_HOME:-$HOME/.local/share}/zfiles/vault-template/_extensions/obsidian/obsidian.lua"
+FROM="markdown+wikilinks_title_after_pipe+mark"
+
+TO=pdf
+OUTPUT=""
+PAPER=false
+ACTION=render
+declare -a EXTRA=()
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --to) TO=${2:-}; shift 2 ;;
+        -o|--output) OUTPUT=${2:-}; shift 2 ;;
+        --paper) PAPER=true; shift ;;
+        --preview) ACTION=preview; shift ;;
+        -h|--help) sed -n '2,9p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        --) shift; EXTRA+=("$@"); break ;;
+        -*) EXTRA+=("$1"); shift ;;
+        *) break ;;
+    esac
+done
+
+NOTE=${1:-}
+[[ -n $NOTE ]] || die "usage: obsidian-render <note.md> [--to pdf|tex|html|docx]"
+[[ -f $NOTE ]] || die "no such note: $NOTE"
+NOTE=$(cd "$(dirname "$NOTE")" && pwd)/$(basename "$NOTE")
+
+command -v quarto >/dev/null 2>&1 || die "quarto not installed.
+  Omarchy: quarto-cli-bin is in omarchy/pkglist.txt
+  WSL:     re-run zfiles bootstrap.sh (wsl/setup.sh installs the .deb)"
+
+[[ $TO == tex ]] && TO=latex
+
+if [[ $TO == pdf || $TO == latex ]]; then
+    if ! command -v pdflatex >/dev/null 2>&1 \
+       && ! command -v xelatex >/dev/null 2>&1 \
+       && ! command -v lualatex >/dev/null 2>&1 \
+       && ! command -v tectonic >/dev/null 2>&1 \
+       && [[ ! -d "${XDG_DATA_HOME:-$HOME/.local/share}/TinyTeX" ]]; then
+        echo "obsidian-render: no LaTeX engine found. Fastest fix:" >&2
+        echo "    quarto install tinytex" >&2
+    fi
+fi
+
+# Find the vault and decide which of the two paths this is.
+dir=$(dirname "$NOTE")
+VAULT=""
+while [[ $dir != / ]]; do
+    [[ -d "$dir/.obsidian" ]] && { VAULT=$dir; break; }
+    dir=$(dirname "$dir")
+done
+
+declare -a CMD=(quarto "$ACTION")
+
+if [[ -n $VAULT && -f "$VAULT/_quarto.yml" ]]; then
+    # Inside a project: Quarto already knows the reader extensions, the filter,
+    # the bibliography and the formats. Adding them here would override the
+    # vault's own settings, so pass nothing but the target.
+    cd "$VAULT" || die "cannot enter vault: $VAULT"
+    CMD+=("${NOTE#"$VAULT"/}")
+else
+    # A loose note. Supply what the project would have.
+    [[ -f $FILTER ]] || die "filter not found: $FILTER
+  Run zfiles bootstrap.sh, or stow the 'scripts' package."
+    cd "$dir" || die "cannot enter $dir"
+    CMD+=("$(basename "$NOTE")" --from "$FROM" --lua-filter "$FILTER")
+
+    if $PAPER; then
+        # Only meaningful outside a project; inside one, _quarto.yml owns this.
+        CMD+=(-M documentclass=article -M papersize=letter
+              -M number-sections=true -M colorlinks=true
+              -V geometry:margin=1in)
+    fi
+    # A loose note next to a references.bib should still resolve its citations.
+    [[ -s "$dir/references.bib" ]] && CMD+=(--bibliography "$dir/references.bib")
+fi
+
+[[ $ACTION == render ]] && CMD+=(--to "$TO")
+[[ -n $OUTPUT ]] && CMD+=(--output "$OUTPUT")
+((${#EXTRA[@]})) && CMD+=("${EXTRA[@]}")
+
+exec "${CMD[@]}"

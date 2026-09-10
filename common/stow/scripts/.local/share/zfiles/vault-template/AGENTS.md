@@ -30,6 +30,42 @@ from this directory. Keep it short and concrete — agents waste tokens on long 
 - For pure LaTeX (`\cite{}`), the BibTeX key matches the `@` key.
 - Citation key format is `auth.lower + shorttitle(3, 3) + year` (e.g. `smithdeeplea2024`).
 
+## Rendering (notes → paper)
+
+**This vault is a Quarto project, so notes render directly.** No conversion step,
+no intermediate file:
+
+```
+quarto render notes/x.md --to pdf      # paper
+quarto render notes/x.md --to latex    # .tex for arXiv or a journal
+quarto preview notes/x.md              # live reload while editing in Obsidian
+```
+
+`.md` notes and `.qmd` drafts are both valid input. What makes that work is two
+lines in `_quarto.yml`:
+
+```yaml
+from: markdown+wikilinks_title_after_pipe+mark
+filters: [obsidian]
+```
+
+Pandoc handles `[[links]]`, `![[images]]` and `==highlights==` natively; the
+`obsidian` filter (`_extensions/obsidian/obsidian.lua`) adds `[[@citekey]]`
+citations, `![[Note#Section]]` transclusion, `> [!callout]` blocks and
+`%%comments%%`.
+
+**Never "fix" Obsidian syntax with a regex over a note.** The filter runs on the
+parsed syntax tree, where math is already an opaque node and cannot be damaged.
+A text-level pass cannot tell `==highlight==` from `==` in an equation, or a
+`^block-id` from a superscript, and it corrupts formulas silently.
+
+If a render fails, read the `.tex` next to the output (`keep-tex: true` is set) —
+that is what LaTeX actually saw. Filter warnings go to stderr:
+`quarto render notes/x.md --to pdf 2>&1 | grep obsidian.lua`.
+
+`obsidian-render` still exists as a convenience wrapper, mainly for notes that
+live *outside* a vault. Inside this one, call `quarto` directly.
+
 ## Publishing
 
 - **Never edit `~/Documents/Repos/zstreeter.github.io/posts/` directly.** Source of

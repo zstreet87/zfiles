@@ -327,6 +327,25 @@ if command -v herdr &>/dev/null; then
     done
 fi
 
+# Pre-install opencode's plugin SDK with npm.
+#
+# A file in ~/.config/opencode/plugins (the herdr integration above puts one
+# there) makes opencode install @opencode-ai/plugin on every launch, using the
+# bun it bundles. Behind the corporate MITM proxy that install cannot complete
+# — bun ships its own CA store and never sees the Zscaler root, unlike curl and
+# npm, which read /etc/ssl/certs. It is not fatal, just slow: bun retries for
+# ~70s before giving up, and opencode holds the first TUI frame until it does.
+# The pane sits blank and empty the whole time, which reads as "opencode didn't
+# launch". npm resolves the same dependency in ~15s and the check below skips
+# it once node_modules exists, so this costs nothing on later runs.
+if [[ -d "$HOME/.config/opencode/plugins" ]] \
+    && ! [[ -d "$HOME/.config/opencode/node_modules/@opencode-ai/plugin" ]] \
+    && command -v npm &>/dev/null; then
+    info "Pre-installing opencode plugin SDK (bun can't reach the registry)..."
+    (cd "$HOME/.config/opencode" && npm install --no-audit --no-fund @opencode-ai/plugin) \
+        || warn "opencode plugin SDK install failed — opencode will be slow to first paint."
+fi
+
 fi  # ! $REMOTE
 
 # Install Yazi plugins, and fill the flavor slot on non-Omarchy targets.
@@ -423,4 +442,38 @@ if ! $REMOTE; then
     if ! command -v new-research-project &>/dev/null; then
         warn "new-research-project not on PATH. Ensure ~/.local/bin is in PATH (zsh)."
     fi
+fi
+
+# Agent skills. Stow puts them in ~/.agents/skills (one per program package:
+# measure, obsidian, quarto, pandoc, zotero, latex, reverify). pi reads that
+# directory natively; Claude Code and Codex each need a link, which is all this does.
+# Runs on remote too — the skill packages are stowed there.
+if command -v agent-skills &>/dev/null; then
+    info "Linking agent skills..."
+    agent-skills || warn "agent-skills failed; run it by hand to see why"
+elif [[ -d "$HOME/.agents/skills" ]]; then
+    # Remote doesn't stow `scripts`, so the linker isn't there. pi still sees
+    # the skills; say so rather than leaving it looking broken.
+    info "Agent skills in ~/.agents/skills (pi reads these natively)"
+fi
+
+# reverify — binary analysis, installed on demand rather than at bootstrap.
+#
+# Deliberately NOT installed or registered here. It is an MCP server for
+# verifying claims about compiled artifacts, and nothing in this setup's daily
+# work asks a binary question; registering it would put nine tool schemas in
+# every request of every session forever to buy an option that never gets
+# exercised. The skill under ~/.agents/skills/reverify/ is the resident part,
+# and it says to run `reverify-setup` first.
+#
+# The general "check, don't assume" job this was originally reached for belongs
+# to `measure`, checked below.
+
+# measure — the empirical ledger. Nothing to install: one stdlib-only Python
+# script, stowed onto PATH. This just confirms it landed, since a skill telling
+# an agent to run `measure recall` before quoting a number is worse than no
+# skill at all if the command isn't there.
+if [[ -d "$HOME/.agents/skills/measure" ]] && ! command -v measure &>/dev/null; then
+    warn "measure skill is installed but 'measure' is not on PATH.
+      Check that ~/.local/bin is in PATH and that the 'measure' package stowed."
 fi

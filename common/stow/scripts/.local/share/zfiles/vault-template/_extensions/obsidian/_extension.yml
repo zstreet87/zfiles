@@ -1,0 +1,26 @@
+title: Obsidian
+author: zfiles
+version: 1.0.0
+quarto-required: ">=1.4.0"
+
+contributes:
+  filters:
+    # `at: pre-ast` is load-bearing -- do not drop it back to a bare path.
+    #
+    # A filter with no position runs after Quarto has already normalized the
+    # document, which is too late for callouts. This filter turns
+    # `> [!warning] Careful` into a `.callout-warning` Div, and Quarto converts
+    # that Div into a tcolorbox and adds tcolorbox to the LaTeX preamble --
+    # but only during normalization. Arrive after it and the Div is passed
+    # through as an anonymous Div: the box disappears, and because the title
+    # lives in an ATTRIBUTE rather than in the content, the title disappears
+    # with it. The document still builds. HTML still looks right, because the
+    # HTML writer renders the class anyway. Only the PDF quietly loses the
+    # callout, which is the hardest way to notice a bug.
+    #
+    # Measured on Quarto 1.10.18, rendering the same note to PDF:
+    #   pre-ast      tcolorbox present   <- correct
+    #   post-ast     tcolorbox absent
+    #   pre-quarto   tcolorbox absent    <- despite the name
+    - at: pre-ast
+      path: obsidian.lua

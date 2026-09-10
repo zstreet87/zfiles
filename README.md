@@ -87,19 +87,36 @@ packages on every target:
 
 | Package    | Purpose                            |
 |------------|------------------------------------|
-| `shell`    | Shell-agnostic config sourced by **both** zsh and bash: `env.sh`, `aliases.sh`, `commands.sh`, `git-prompt.sh` |
+| `shell`    | Shell-agnostic config sourced by **both** zsh and bash: `env.sh`, `aliases.sh`, `commands.sh`, `git-prompt.sh` (git's contrib copy, plus a `__gh_ps1` addition below a marker line) |
 | `zsh`      | zsh-only bits (`.zshrc`, prompt, zap plugins) |
 | `bash`     | bash-only bits (`rc.sh`, prompt) — see [The bash hook](#the-bash-hook) |
 | `yazi`     | File manager (plugins vendored in-repo) |
 | `herdr`    | Terminal workspace manager + `herdr-navd` (WSL only; see [Seamless navigation](#seamless-navigation)) |
 | `opencode` | opencode agent config              |
 | `pi`       | pi agent config                    |
-| `scripts`  | `new-research-project`, `publish-post` helpers + vault template |
+| `scripts`  | `new-research-project`, `publish-post`, `obsidian-{vault,open,render}` + vault template — see [Research pipeline](#research-pipeline) |
 | `sioyek`   | PDF viewer config — theme-rendered on Omarchy, static Catppuccin fallback elsewhere, Windows build on WSL |
 | `xdg`      | mimeapps defaults; entries naming absent `.desktop` files just no-op |
+| `measure`  | `measure` — an empirical ledger, so an agent quotes measurements instead of recalling them — see [Measured, not remembered](#measured-not-remembered) |
+| `obsidian` | skills: `obsidian` (vault + rendering) and `obsidian-note` (capture) |
+| `quarto`   | skill: filter phases, temp-dir staging, blog publish path |
+| `pandoc`   | skill: what Pandoc 3.x already handles, and the never-preprocess rule |
+| `zotero`   | skill: Better BibTeX keys, read-only `references.bib`, missing-citation triage |
+| `latex`    | skill: TinyTeX, reading a failed `.tex`, symptom → cause table |
+| `reverify` | skill + `reverify-setup`, an install-on-demand binary-analysis CLI |
 
-Remote stows `shell`, `bash`, and `yazi` only (`STOW_ONLY` in
-`remote/setup.sh`) — no zsh, no herdr, no pi, no desktop anything.
+Those last seven each carry a `SKILL.md` under `~/.agents/skills/`, which is the
+root pi reads natively; `agent-skills` symlinks the same tree into
+`~/.claude/skills` and `~/.codex/skills` so all four harnesses see one copy. A
+skill lives with the program it describes rather than in one central pile, so
+removing a package removes its guidance with it.
+
+Remote stows `shell`, `bash`, `yazi`, `measure`, and the skill packages
+(`STOW_ONLY` in `remote/setup.sh`) — no zsh, no herdr, no pi, no desktop
+anything. The skills go along because they are inert markdown, and an agent on
+the work server is as capable of hand-writing a broken regex over a note as one
+running locally; `measure` goes because that box is where the benchmarks run.
+`scripts` stays out, so no research workspace is created there.
 
 ### Remote servers
 
@@ -244,6 +261,7 @@ idempotent — bootstrap re-runs it every time, and it only acts on what differs
 | GlazeWM   | configured — `wsl/windows/glazewm/config.yaml`, mapped from Omarchy's Hyprland bindings |
 | Navigation | `herdr-navd` — nvim splits → herdr panes → GlazeWM windows |
 | sioyek    | Windows build via winget, configs in `wsl/windows/sioyek/` — see below |
+| Obsidian  | Windows build via winget (`--scope user`), detected before install; no config copied — Obsidian keeps its settings per-vault |
 
 The full Omarchy→Windows binding map — every chord mapped, substituted, or
 explicitly dropped, with reasons — is `wsl/windows/PARITY.md`. The from-scratch
@@ -451,6 +469,152 @@ the Himalaya accounts and sends new-mail events to it through `notify-send`.
 ### Neovim
 
 The bootstrap script clones [my neovim config](https://github.com/zstreeter/nvim) and symlinks Omarchy's theme, so colorschemes stay in sync.
+
+## Research pipeline
+
+One source of truth — a note in an Obsidian vault — reaching three
+destinations: the blog, a PDF, and a `.tex` for a journal or arXiv.
+
+```
+Zotero ──(Better BibTeX)──> references.bib
+                                  │
+   Obsidian vault ─────────> Quarto ──┬──> .html ──> publish-post ──> blog
+   (notes/, drafts/,    (reads .md directly,   ├──> .pdf   (the paper)
+    literature/)         via the obsidian      └──> .tex   (arXiv / journal)
+                         filter at pre-ast)
+```
+
+**A vault is a Quarto project.** There is no conversion step and no intermediate
+file — `quarto render notes/x.md --to pdf` works on the note where it sits,
+while Obsidian still has it open. Two lines in the vault's `_quarto.yml` are
+what make that true:
+
+```yaml
+from: markdown+wikilinks_title_after_pipe+mark
+filters: [obsidian]
+```
+
+| Command | Does |
+|---------|------|
+| `new-research-project <name>` | scaffolds `~/research/<name>/` from the vault template |
+| `obsidian-vault path\|name\|list\|config` | resolves vault locations on any target |
+| `obsidian-open [-v <vault>] [<file>]` | opens Obsidian **at a note**, via an `obsidian://` URI |
+| `quarto render <note.md> --to pdf\|latex\|html` | note → paper, inside a vault |
+| `obsidian-render <note.md> [--to …]` | the same, for notes *outside* a vault — supplies the reader extensions and filter by hand |
+| `publish-post drafts/<f>.qmd [slug]` | copies a draft into the blog repo |
+
+### Why the filter is a filter and not a preprocessor
+
+Obsidian Flavored Markdown is not Pandoc Markdown, and Pandoc does not error on
+the difference — it silently emits the wrong thing. Most of the gap Pandoc 3.x
+closes on its own once the reader is asked for it:
+
+| written in Obsidian | handled by |
+|---|---|
+| `[[Some Note\|alias]]`, `![[figure.png]]` | Pandoc — `+wikilinks_title_after_pipe` |
+| `==highlight==` | Pandoc — `+mark` |
+| `[[@smith2024]]` | the filter — rewrites the link to a real `Cite` |
+| `![[Other Note#Methods]]` | the filter — Pandoc has no transclusion |
+| `> [!warning] Careful` | the filter — becomes a Quarto callout |
+| `%% draft note %%` | the filter — removed, not printed in the paper |
+| `^block-id` | the filter — stripped |
+
+The citation row is the one that costs real work: this repo's vaults file
+literature notes as `@<citekey>.md` and link them `[[@citekey]]` (see the vault
+`AGENTS.md`), so without the rewrite those references never reach the
+bibliography and the paper's reference list is quietly short.
+
+The important word is **filter**. This used to be a ~400-line Python normalizer
+doing regex substitution over the note's text, which meant stashing math and
+fenced code first and restoring them last — because `^` is a block id *and* a
+superscript, `==` is a highlight *and* an alignment, `[[ ]]` is a wikilink *and*
+a bracket matrix. That whole class of corruption is designed out by running
+after the parse instead of before it: in the AST, math is an opaque `Math` node
+the filter cannot reach into, so a formula cannot be damaged by a rule meant for
+prose. **Never "fix" Obsidian syntax with a regex over a note.**
+
+Two things about this are load-bearing and were found the hard way, both of
+which fail *silently* — the build succeeds and the output is wrong:
+
+- **`at: pre-ast`.** The filter is declared in `_extension.yml` at the earliest
+  phase. Measured: at `post-ast` or `pre-quarto`, callouts render fine in HTML
+  but degrade in PDF to a plain quote with the title dropped — Quarto has
+  already passed the point where it lowers callout divs into `tcolorbox`.
+- **Quarto stages input into a temp dir.** `PANDOC_STATE.input_files[1]` points
+  at `/tmp/quarto-session-…`, so walking up from it never finds `.obsidian` and
+  transclusion resolves nothing. The filter reads `QUARTO_DOCUMENT_PATH` first,
+  then the working directory, then `QUARTO_PROJECT_DIR`.
+
+The blog path is unchanged: `publish-post` still consumes a `.qmd` from
+`drafts/`, so nothing new to maintain there.
+
+### Measured, not remembered
+
+An agent's memory of a number is not evidence. Across a context reset it keeps
+the conclusion — "peak HBM was 41 GB" — and drops the provenance: which machine,
+which commit, which flags, whether the tree was dirty. It then repeats the
+number confidently long after the code that produced it changed.
+
+`measure` closes that gap, and the design turns on one constraint: **entries
+cannot be asserted.** `measure run` executes the command and captures what came
+back, so a record is a byproduct of execution rather than a claim. A notes file
+would just be another place to write the same guess.
+
+```bash
+measure run --tag hbm-peak --input src/residualMarginals.cc \
+  -e 'peak_gb=Peak HBM: ([0-9.]+)' -- ./build/bench --matrix-free --size 4096
+
+measure recall hbm        # what's known, with staleness flags
+measure diff hbm-peak     # last two runs: what moved, and by how much
+```
+
+Output streams live and the exit code passes through, so it composes inside
+scripts and Makefiles — and a *failed* run is recorded too, since a crash at a
+given size is evidence.
+
+The second half is staleness. Every entry carries the commit it was taken at and
+whether the tree was dirty; `--input` additionally records file hashes, which is
+what makes the check exact rather than advisory:
+
+| status | means | quote it? |
+|---|---|---|
+| `OK` | recorded inputs byte-identical, or current clean commit | yes, with the date |
+| `STALE` | a recorded `--input` changed — names which | no, re-run |
+| `?` | dirty tree, or a different commit with nothing pinned | unknown, not weak support |
+| `UNVERIFIED` | a `measure note` — read, not executed | never as a measurement |
+
+Storage is one append-only JSONL file at `<repo-root>/.measurements/ledger.jsonl`
+(`jq`-able; a half-written entry costs one line, not the ledger). Append-only
+because the history is often the finding — a number that moved across three
+commits says more than its current value. Stdlib Python, no daemon, no server,
+and it's in remote's `STOW_ONLY` because the work server is where the benchmarks
+actually run.
+
+The accompanying `SKILL.md` is what makes it bind: check `measure recall` before
+asserting a performance or hardware fact, record after producing one.
+
+**`reverify`** is the same idea aimed at binaries — a PE parser, disassembler and
+CPU emulator returning `VERIFIED` / `REFUTED` / `INCONCLUSIVE` against the actual
+bytes. It ships as an install-on-demand CLI (`reverify-setup`) and is
+deliberately **not** registered as an MCP server: nine tool schemas would ride in
+every request of every session forever, and nothing in this setup's daily work
+asks a binary question. The skill costs nothing until one does.
+
+### Toolchain
+
+Quarto and TeX come from each target's package list: `quarto-cli-bin` +
+`texlive-most` on Omarchy, the official `.deb` + `texlive-*` on WSL. If a PDF
+render reports no LaTeX engine, `quarto install tinytex` is the fastest fix.
+Obsidian itself is `obsidian` in `omarchy/pkglist.txt` (installed with
+`--needed`, so already-present is a no-op) and a detect-then-winget block in
+`wsl/windows/install.ps1`.
+
+> **A vault must be opened in Obsidian once, by hand.** `obsidian://` URIs
+> address a vault by *name*, and Obsidian only knows names for vaults in its own
+> `obsidian.json` registry — which the app writes on first open, not the
+> installer. Until then `obsidian-open` lands on the vault switcher rather than
+> the note. `obsidian-vault` works regardless: it falls back to `~/research/*`
+> and a bounded scan of the Windows profile.
 
 ## Omarchy Resources
 

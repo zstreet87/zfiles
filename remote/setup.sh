@@ -3,8 +3,25 @@
 # everything lands under $HOME. See remote/install.sh for the entry point.
 
 # The stow subset a remote gets: bash prompt + shared shell config + yazi.
-# No zsh (those are bash terminals), nothing desktop-, agent- or mail-bound.
-STOW_ONLY=(shell bash yazi)
+# No zsh (those are bash terminals), nothing desktop- or mail-bound.
+#
+# The trailing packages are skills — plain markdown under ~/.agents/skills that
+# every harness reads. They are here because an agent running ON the work
+# server should still know how this pipeline is built: that Quarto reads
+# Obsidian notes directly, that filters belong at `at: pre-ast`, that
+# references.bib is generated and must not be hand-edited. Nothing in them
+# needs a GUI, and being wrong about those on a remote box costs exactly as
+# much as being wrong locally.
+#
+# `scripts` is still excluded, so no research workspace is created here — a
+# work server is not where the vault lives. The skills describe the workflow;
+# they do not install it.
+#
+# `measure` is the one that carries a real program rather than only a skill, and
+# it belongs here most of all: the benchmarks run on this box, and this is where
+# an agent's context reset is most likely to turn a measured number into a
+# remembered one. Python 3 and git are all it needs.
+STOW_ONLY=(shell bash yazi measure obsidian quarto pandoc zotero latex reverify)
 
 target_packages() {
     # No sudo, no package manager — mise is the only source of binaries here.

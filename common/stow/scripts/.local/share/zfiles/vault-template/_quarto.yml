@@ -1,15 +1,55 @@
 project:
   type: default
+  # Explicit, so `quarto render` builds the papers and not every note in the
+  # vault. Both extensions are listed because a draft may be a .qmd written for
+  # Quarto or a .md written in Obsidian -- after the reader settings below,
+  # they are the same thing.
   render:
     - "drafts/**/*.qmd"
+    - "drafts/**/*.md"
 
 execute:
   freeze: auto
 
+# --- Obsidian as a first-class Quarto input ----------------------------------
+# These two settings are what let `quarto render` and `quarto preview` read a
+# note straight out of the vault, with no conversion step and no intermediate
+# file. `quarto preview` on a note gives live reload while you edit it in
+# Obsidian.
+#
+#   +wikilinks_title_after_pipe   [[Note]] and [[Note|alias]]
+#   +mark                         ==highlight==
+#   filters: [obsidian]           the rest -- see _extensions/obsidian/
+#
+# Pandoc parses first and the filter runs on the syntax tree, so math and code
+# are Math and Code nodes by the time any rule sees them and cannot be damaged.
+# A text-level preprocessor could not make that guarantee: `==` also means
+# comparison, `^` also means superscript, `[[ ]]` also delimits a matrix.
+from: markdown+wikilinks_title_after_pipe+mark
+filters:
+  - obsidian
+
+# Two formats from one source: the blog and the paper. `quarto preview` uses
+# html only, so drafting stays fast; `quarto render x.md --to pdf` is the
+# paper, and `--to latex` leaves the .tex behind for arXiv or a journal
+# template. A bare `quarto render` builds both and so needs a LaTeX engine --
+# `quarto install tinytex` if the target's texlive packages aren't in.
 format:
   html:
     toc: true
     code-fold: true
     highlight-style: github-dark
+  pdf:
+    documentclass: article
+    papersize: letter
+    geometry:
+      - margin=1in
+    number-sections: true
+    colorlinks: true
+    # Keeps the .tex beside the .pdf. That file is the deliverable when a
+    # journal or arXiv wants source rather than a PDF.
+    keep-tex: true
 
+# Written by Better BibTeX, or by `obsidian-cite sync`. Citations reach here as
+# [[@citekey]] in a note, which the obsidian filter turns into a real citation.
 bibliography: references.bib

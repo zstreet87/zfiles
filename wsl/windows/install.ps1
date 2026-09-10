@@ -743,11 +743,75 @@ if (-not $sioyekDir) {
     # targets, so the Linux package's copy is the single source. The prefs are
     # NOT shared -- on Omarchy that file is a symlink the theme engine rewrites
     # on every theme switch, which is meaningless here.
-    $repoDir = Split-Path -Parent $WindowsDir
-    Copy-IfChanged (Join-Path $repoDir 'sioyek\.config\sioyek\keys_user.config') `
+    # $WindowsDir is <repo>/wsl/windows, so two levels up is the repo root. The
+    # keymap moved under common/stow/ in the per-OS restructure; it is a shared
+    # package now, not a wsl/ one.
+    $repoRoot = Split-Path -Parent (Split-Path -Parent $WindowsDir)
+    Copy-IfChanged (Join-Path $repoRoot 'common\stow\sioyek\.config\sioyek\keys_user.config') `
                    (Join-Path $sioyekDir 'keys_user.config') | Out-Null
     Copy-IfChanged (Join-Path $WindowsDir 'sioyek\prefs_user.config') `
                    (Join-Path $sioyekDir 'prefs_user.config') | Out-Null
+}
+
+# --- Obsidian ----------------------------------------------------------------
+# The note vault, and the same rule as sioyek puts it on the Windows side: it
+# has a window, so it is the Windows build and WSL routes to it. The Linux
+# entry point is common/stow/scripts/.local/bin/obsidian-open, which addresses
+# it through an obsidian://open URI rather than a filename -- Obsidian is
+# single-instance, so a path handed to a running instance does nothing while
+# the URI switches the open window to that note.
+#
+# DETECTED BEFORE INSTALLED, and not only to save time on a re-run: Obsidian is
+# also in omarchy/pkglist.txt, and it is entirely normal for it to already be
+# present here from a manual install. Probing first is what keeps this script
+# idempotent across every way it could have arrived.
+#
+# --scope user is load-bearing, not tidiness. This is a domain-joined machine
+# (amd\...) whose account is NOT in the local Administrators group, so a
+# machine-scope install prompts for credentials nobody has and fails; per-user
+# lands in %LOCALAPPDATA%\Programs and needs no elevation. Obsidian's own
+# default is per-user anyway, so this only pins what winget would otherwise be
+# free to reinterpret.
+function Get-ObsidianExe {
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Obsidian\Obsidian.exe'),
+        (Join-Path $env:ProgramFiles 'Obsidian\Obsidian.exe')
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    return $null
+}
+
+$obsidianExe = Get-ObsidianExe
+if (-not $obsidianExe) {
+    Info 'Obsidian not installed - fetching Obsidian.Obsidian via winget'
+    # Non-terminating, as with the installs above: a note-taking app that
+    # failed to install should not take the rest of the Windows setup with it.
+    try {
+        winget install --id Obsidian.Obsidian --exact --silent --scope user `
+                       --accept-package-agreements --accept-source-agreements
+    } catch {
+        Write-Warning "[zfiles] winget install failed: $_"
+    }
+    $obsidianExe = Get-ObsidianExe
+}
+
+if (-not $obsidianExe) {
+    Write-Warning @'
+[zfiles] Obsidian unavailable - `obsidian-open` from WSL will have nowhere to go.
+  Install it by hand and re-run bootstrap.sh; this script is idempotent:
+    winget install --id Obsidian.Obsidian --scope user
+'@
+} else {
+    Info "obsidian   $obsidianExe"
+    # No config is copied in. Unlike sioyek, Obsidian keeps its settings inside
+    # each vault's .obsidian/ directory, so the per-vault defaults that zfiles
+    # does own already ship with the vault template that new-research-project
+    # copies. Writing anything into %APPDATA%\obsidian here would fight the app
+    # for obsidian.json, which is the vault REGISTRY -- see the header of
+    # common/stow/scripts/.local/bin/obsidian-vault for why that file has to
+    # stay the app's alone.
 }
 
 Info 'done'
