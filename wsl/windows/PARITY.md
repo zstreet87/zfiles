@@ -7,7 +7,7 @@ Caps→F13 remap + `caps.ahk`'s f14 channel on Windows (see the README's
 
 Stack (decided): **AutoHotkey** (`autohotkey/caps.ahk`, kanata blocked by
 Zscaler) + **GlazeWM** (`glazewm/config.yaml`) + **Zebar** (waybar stand-in)
-+ **PowerToys Run** (launcher) + **WezTerm** (`wezterm/wezterm.lua`).
++ **PowerToys Command Palette** (launcher) + **WezTerm** (`wezterm/wezterm.lua`).
 
 Every binding that is *active* on the Omarchy machine (Omarchy defaults
 media/clipboard/tiling-v2/utilities + `~/.config/hypr/bindings.conf` +
@@ -22,7 +22,7 @@ media/clipboard/tiling-v2/utilities + `~/.config/hypr/bindings.conf` +
 | Caps+Q | close window | `caps.ahk` WinClose (deliberately not via GlazeWM) |
 | Caps+W | browser, new window | `f14+w` → chrome `--new-window` |
 | Caps+Return | terminal | `f14+enter` → WezTerm (opens straight into WSL) |
-| Caps+Space | app launcher (walker) | `caps.ahk` → PowerToys Run |
+| Caps+Space | app launcher (walker) | `caps.ahk` → PowerToys Command Palette |
 | Caps+1..0 | switch workspace | `f14+1..0` |
 | Caps+Shift+1..0 | move window to workspace | `f14+shift+1..0` (moves and follows) |
 | Caps+Shift+H/J/K/L, Shift+arrows | swap/move window | `f14+shift+hjkl/arrows` → `move --direction` |

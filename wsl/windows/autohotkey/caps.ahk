@@ -127,11 +127,32 @@ NAV_KEYS := Map("h", "left", "j", "down", "k", "up", "l", "right")
 
 ; Space is absent from WM_KEYS for a different reason: it is the app launcher,
 ; Omarchy's SUPER+SPACE. GlazeWM cannot host this one -- it has no "send a
-; keystroke" command, and PowerToys Run is activated by a hotkey rather than by
+; keystroke" command, and the launcher is activated by a hotkey rather than by
 ; running an exe, so there is nothing for shell-exec to call. Hence the
-; translation happens here: Caps+Space becomes PowerToys Run's own default
-; chord. Change this if you rebind PT Run away from Alt+Space.
-LAUNCHER_CHORD := "!{Space}"
+; translation happens here: Caps+Space becomes the launcher's own default chord.
+;
+; The launcher is PowerToys Command Palette (Win+Alt+Space), not PowerToys Run
+; (Alt+Space), and the difference is a reliability one rather than a taste one.
+; On 2026-09-10 the PowerToys tray's centralized keyboard hook logged this chord
+; five times between 08:20 and 09:12 while nothing appeared on screen: PT Run's
+; window process, PowerToys.PowerLauncher, had called Application.Current.Exit
+; two seconds after servicing the first press -- a clean shutdown, no crash in
+; the Application log -- and the tray has no logic to respawn it. Every press
+; after the first was handed to a process that no longer existed. CmdPal is PT
+; Run's supported successor, and it takes its chord with RegisterHotKey
+; (UseLowLevelGlobalHotkey=false) rather than a low-level hook, which is also
+; the more dependable receiver for the synthetic keystroke Send produces here.
+;
+; Sending a chord is still fire-and-forget: it succeeds whether or not anything
+; is listening, which is exactly why the failure above was invisible. CmdPal is
+; a packaged app and can be activated directly --
+;   explorer.exe shell:AppsFolder\Microsoft.CommandPalette_8wekyb3d8bbwe!App
+; -- which would revive a dead launcher instead of keying into the void. That is
+; a bigger change than this one (an activation does not toggle the palette shut
+; the way a second chord press does), so it is noted, not taken.
+;
+; Change this if you rebind the palette away from Win+Alt+Space.
+LAUNCHER_CHORD := "#!{Space}"
 
 capsDownAt := 0
 capsHeld   := false
@@ -169,14 +190,14 @@ ProxyToWm(hotkeyName) {
 ; No {Blind} here, unlike SendToWm. Caps held is only a flag in this script --
 ; nothing is physically down but CapsLock itself, which is not a modifier and is
 ; pinned off by SetCapsLockState. Passing real modifiers through would only turn
-; an accidental Caps+Shift+Space into a chord PT Run doesn't answer to.
+; an accidental Caps+Shift+Space into a chord the palette doesn't answer to.
 ;
 ; Consuming Space here also suppresses the tap-Escape on release: the CapsLock
 ; up handler only emits Escape when A_PriorKey is still CapsLock, and Space
 ; having been pressed in between is exactly what makes it not.
 ;
-; The daemon call first, and it matters. PT Run is a tool window GlazeWM cannot
-; manage, so closing it hands foreground back to the top app window in the
+; The daemon call first, and it matters. The palette is a tool window GlazeWM
+; cannot manage, so closing it hands foreground back to the top app window in the
 ; Z-order -- on the other monitor, if the workspace you launched from is empty
 ; -- and the app then opens over there. /launch claims the next window GlazeWM
 ; manages for the workspace focused right now, which has to be read BEFORE the

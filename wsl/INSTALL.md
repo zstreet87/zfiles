@@ -53,8 +53,8 @@ WezTerm/sioyek configs, and `.wslconfig` mirrored networking) is installed by
       → GlazeWM windows (the reply layer is in `herdr-navd`'s response if a
       move ever does nothing).
 - [ ] `systemctl --user status herdr-navd` — running on `127.0.0.1:6224`.
-- [ ] Caps+Space opens PowerToys Run and the launched app lands on the
-      *focused* workspace (the `/launch` claim).
+- [ ] Caps+Space opens PowerToys Command Palette and the launched app lands on
+      the *focused* workspace (the `/launch` claim).
 - [ ] Caps+Return opens WezTerm straight into WSL; Caps+1..0, Caps+Shift+hjkl
       behave per `wsl/windows/PARITY.md`.
 - [ ] Graphics, cheapest test first: `wezterm imgcat <some.png>` in WSL, then

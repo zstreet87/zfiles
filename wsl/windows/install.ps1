@@ -497,18 +497,28 @@ if (-not $wmExe) {
     }
 }
 
-# --- PowerToys Run -----------------------------------------------------------
+# --- PowerToys (Command Palette) ---------------------------------------------
 # The app launcher, standing in for Omarchy's walker on SUPER+SPACE. GlazeWM
 # has no launcher and cannot host one: it has no "send a keystroke" command,
-# and PT Run answers to a hotkey rather than to being exec'd, so shell-exec has
-# nothing to call. windows/autohotkey/caps.ahk therefore translates Caps+Space
-# into PT Run's own default Alt+Space; see LAUNCHER_CHORD there.
+# and the palette answers to a hotkey rather than to being exec'd, so shell-exec
+# has nothing to call. windows/autohotkey/caps.ahk therefore translates
+# Caps+Space into the palette's own default Win+Alt+Space; see LAUNCHER_CHORD.
 #
 # PowerToys and not Flow Launcher or Keypirinha: this is a managed work laptop,
 # and a Microsoft-signed, MIT-licensed package is the one least likely to argue
 # with either endpoint security or the software policy.
 #
-# PT Run's activation chord is left at its default rather than configured here.
+# Command Palette and not PowerToys Run, though PowerToys ships both. On
+# 2026-09-10 PT Run's window process (PowerToys.PowerLauncher) called
+# Application.Current.Exit two seconds after servicing its first invocation --
+# a clean shutdown, nothing in the Application log -- and the tray never
+# respawned it. The tray's keyboard hook went on accepting Caps+Space and
+# handing it to a process that was gone: five presses over 50 minutes, no
+# window, no error anywhere the user could see. CmdPal is PT Run's supported
+# successor and takes its chord with RegisterHotKey rather than a low-level
+# hook. See the LAUNCHER_CHORD comment in caps.ahk.
+#
+# The activation chord is left at its default rather than configured here.
 # It lives in a settings JSON that PowerToys rewrites wholesale on exit, so
 # editing it from a script races the running process and loses.
 # Probe all three scopes rather than assuming Program Files: winget picks the
@@ -541,44 +551,45 @@ if (-not $ptExe) {
 } else {
     Info "powertoys  $ptExe"
 
-    # PT Run indexes the Desktop as a program source by default. zfiles empties
-    # the desktop on purpose (see the Desktop icons section), so that source can
-    # only ever contribute stale entries: the plugin caches the .lnk path it saw
-    # at index time, and launching one after the file is gone fails with
-    #   Unable to start: C:\Users\Public\Desktop\WezTerm.lnk
-    # Every app worth launching has a Start Menu entry pointing at the real
-    # .exe, and the Start Menu / registry / PATH sources stay enabled, so this
-    # loses nothing. The cost is that a shortcut deliberately placed on the
-    # desktop later won't be indexed -- which is the intended trade here.
+    # Exactly one launcher. Command Palette on, PowerToys Run off -- and the
+    # "off" half is the point, not tidiness. Both modules hold a global chord
+    # and both index the same programs, so leaving PT Run enabled keeps a second
+    # low-level keyboard hook in the chain (see the Keyboard Manager block below
+    # for what a stray hook costs here) and keeps Alt+Space bound to the module
+    # that was observed exiting on its own.
+    #
+    # Nothing replaces the old "disable PT Run's Desktop program source" patch
+    # that used to live here: that worked around PT Run's Program plugin caching
+    # .lnk paths from a desktop zfiles deliberately empties, and CmdPal has no
+    # Desktop source to disable -- its app list comes from the AllApps provider,
+    # and its settings expose no equivalent toggle.
     #
     # PowerToys rewrites this JSON wholesale on exit, so patching it underneath
     # a running process loses the change. Stop it first and let the start block
     # below bring it back.
-    $ptProgramSettings = Join-Path $env:LOCALAPPDATA (Join-Path 'Microsoft\PowerToys\PowerToys Run\Settings\Plugins' `
-        'Microsoft.Plugin.Program\ProgramPluginSettings.json')
+    $ptSettings = Join-Path $env:LOCALAPPDATA 'Microsoft\PowerToys\settings.json'
 
-    if (-not (Test-Path -LiteralPath $ptProgramSettings)) {
-        # Written on PT Run's first run; nothing to patch before that.
-        Info 'powertoys  PT Run not configured yet - desktop source left alone'
-    } elseif ((Get-Content -LiteralPath $ptProgramSettings -Raw) -match '"EnableDesktopSource"\s*:\s*true') {
+    if (-not (Test-Path -LiteralPath $ptSettings)) {
+        # Written on PowerToys' first run; nothing to patch before that. The
+        # defaults ship both modules enabled, so a re-run after that first
+        # launch is what settles this.
+        Info 'powertoys  not configured yet - launcher modules left alone'
+    } elseif ((Get-Content -LiteralPath $ptSettings -Raw) -match '"PowerToys Run"\s*:\s*true|"CmdPal"\s*:\s*false') {
         Get-Process -Name 'PowerToys*' -ErrorAction SilentlyContinue | Stop-Process -Force
         Start-Sleep -Seconds 3
 
-        $raw = (Get-Content -LiteralPath $ptProgramSettings -Raw) `
-            -replace '"EnableDesktopSource"\s*:\s*true', '"EnableDesktopSource": false'
-        # Age the index timestamp too, or the plugin trusts a cache that still
-        # holds the deleted desktop shortcuts.
-        $raw = $raw -replace '"LastIndexTime"\s*:\s*"[^"]*"',
-                             '"LastIndexTime": "2000-01-01T00:00:00-05:00"'
+        $raw = (Get-Content -LiteralPath $ptSettings -Raw) `
+            -replace '"PowerToys Run"\s*:\s*true', '"PowerToys Run":false' `
+            -replace '"CmdPal"\s*:\s*false', '"CmdPal":true'
 
         # WriteAllText with an explicit BOM-less encoding, not Set-Content
         # -Encoding UTF8, which emits a BOM on PowerShell 5.1. Same trap as
         # Zebar's settings.json above.
         [System.IO.File]::WriteAllText(
-            $ptProgramSettings, $raw, (New-Object System.Text.UTF8Encoding $false))
-        Info 'powertoys  PT Run desktop program source disabled'
+            $ptSettings, $raw, (New-Object System.Text.UTF8Encoding $false))
+        Info 'powertoys  Command Palette on, PowerToys Run off'
     } else {
-        Info 'powertoys  PT Run desktop source already off'
+        Info 'powertoys  launcher modules already set'
     }
 
     # Keyboard Manager must not remap Caps Lock. caps.ahk owns that key: it holds
@@ -614,7 +625,7 @@ if (-not $ptExe) {
     }
 
     # PowerToys runs its modules from a single tray process; PowerToys.exe being
-    # up is what makes PT Run answer its hotkey.
+    # up is what makes the Command Palette answer its hotkey.
     if (-not (Get-Process -Name 'PowerToys' -ErrorAction SilentlyContinue)) {
         # ShellExecute for the same uiAccess reason as GlazeWM above.
         Start-Process $ptExe

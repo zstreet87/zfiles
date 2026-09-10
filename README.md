@@ -396,16 +396,16 @@ adding a dependency.
 
 #### Launching onto the focused workspace
 
-`Caps+Space` opens PowerToys Run, Omarchy's `SUPER+SPACE`. On a multi-monitor
-setup that used to put the app on the *previous* workspace whenever you launched
-from an empty one — focus workspace 3 on the second screen, launch Outlook, and
-it opens on workspace 1.
+`Caps+Space` opens PowerToys Command Palette, Omarchy's `SUPER+SPACE`. On a
+multi-monitor setup that used to put the app on the *previous* workspace whenever
+you launched from an empty one — focus workspace 3 on the second screen, launch
+Outlook, and it opens on workspace 1.
 
 An empty workspace has no OS-level focus anchor. GlazeWM's focused container is
 the workspace, but Windows' foreground window is still whatever was up last;
-`sync_focus` can only "focus the desktop". PT Run is a tool window GlazeWM can
-never manage, so it doesn't react to PT Run taking foreground — but when PT Run
-closes, Windows hands foreground to the top *managed* window in the global
+`sync_focus` can only "focus the desktop". The palette is a tool window GlazeWM
+can never manage, so it doesn't react to the palette taking foreground — but when
+the palette closes, Windows hands foreground to the top *managed* window in the global
 Z-order, which is on the other screen, and GlazeWM follows it as a manual focus
 change. `should_override_focus` only covers the 100ms after a managed window
 goes away, so nothing catches this. Seconds later the app appears and is
