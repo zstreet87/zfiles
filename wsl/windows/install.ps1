@@ -27,6 +27,25 @@ $WindowsDir = $PSScriptRoot
 $TaskName   = 'zfiles-caps'
 $WmTaskName = 'zfiles-glazewm'
 
+# Rebuild PATH from the registry before anything is launched, because the one
+# this process inherited is almost certainly out of date. bootstrap.sh runs this
+# script through WSL interop, and interop does not read the live Windows
+# environment -- it hands out the copy WSL captured when the distro started. A
+# program installed since then (by winget, below, or by hand) is on the real
+# PATH and absent from ours.
+#
+# That matters past this script, because the environment propagates: the apps
+# started below inherit ours, and everything *they* start inherits it in turn.
+# Observed 2026-09-10 -- PowerToys started from an interop shell, the Command
+# Palette inherited its PATH, KLatexFormula launched from the palette inherited
+# it again, and failed with "No Latex engine given!" while latex.exe sat on the
+# user PATH the whole time. Nothing in the chain was misconfigured; the
+# environment was three processes stale.
+#
+# Machine before User is the order Windows itself composes them in.
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+            [Environment]::GetEnvironmentVariable('Path', 'User')
+
 function Info { param([string]$Message) Write-Host "[zfiles] $Message" }
 
 # Both the Caps Lock remap and the window manager need to run at logon with
