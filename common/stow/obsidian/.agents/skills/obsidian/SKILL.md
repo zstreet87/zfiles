@@ -66,7 +66,9 @@ The vault's `_quarto.yml` carries two settings:
 
 ```yaml
 from: markdown+wikilinks_title_after_pipe+mark
-filters: [obsidian]
+filters:
+  - at: pre-ast
+    path: _extensions/obsidian/obsidian.lua
 ```
 
 Pandoc handles `[[Note]]`, `![[img.png]]` and `==highlight==` natively; the

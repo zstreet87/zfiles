@@ -7,7 +7,9 @@ ordinary --[[ block early.)
 Paired with, and useless without, this in _quarto.yml:
 
     from: markdown+wikilinks_title_after_pipe+mark
-    filters: [obsidian]
+    filters:
+      - at: pre-ast
+        path: _extensions/obsidian/obsidian.lua
 
 WHY A FILTER AND NOT A PREPROCESSOR
 

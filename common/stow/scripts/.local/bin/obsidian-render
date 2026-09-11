@@ -141,8 +141,8 @@ else
     #   --lua-filter a filter given as a flag runs at post-ast, and callouts
     #                have to be rewritten at pre-ast or the tcolorbox and its
     #                title are silently dropped from the PDF. Only the config
-    #                form takes a position. See _extensions/obsidian/
-    #                _extension.yml for the measurements.
+    #                form takes a position. See the filters block in the
+    #                vault template's _quarto.yml for the measurements.
     #
     # So the file below is the loose-note equivalent of the vault's
     # _quarto.yml, and gives byte-identical output to it.

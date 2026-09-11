@@ -26,7 +26,9 @@ A vault scaffolded by `new-research-project` is a Quarto project. Its
 
 ```yaml
 from: markdown+wikilinks_title_after_pipe+mark
-filters: [obsidian]
+filters:
+  - at: pre-ast
+    path: _extensions/obsidian/obsidian.lua
 ```
 
 So `quarto render notes/x.md --to pdf` works on a note written in Obsidian,
@@ -40,11 +42,19 @@ Quarto has normalized the document, which is too late to produce anything Quarto
 itself needs to act on. Declare the phase explicitly:
 
 ```yaml
-contributes:
-  filters:
-    - at: pre-ast
-      path: obsidian.lua
+filters:
+  - at: pre-ast
+    path: _extensions/obsidian/obsidian.lua
 ```
+
+In `_quarto.yml`, not in an extension's `_extension.yml`: the `at:` form under
+`contributes.filters` fails YAML validation on Quarto 1.8 (`path: obsidian.lua
+failed to be a string`), while the project-level form works on 1.8 and 1.10.
+
+And the file being rendered must be in the project's `render:` list. Quarto
+applies `_quarto.yml` **only** to listed files -- one outside the list renders
+with no reader extensions, no filter and no PDF format, with no error to say
+so. The vault template lists `drafts/` and `notes/`.
 
 Valid values, from `share/schema/definitions.yml`:
 `pre-ast, post-ast, pre-quarto, post-quarto, pre-render, post-render, pre-finalize, post-finalize`.

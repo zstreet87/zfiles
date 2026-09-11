@@ -486,12 +486,14 @@ Zotero ──(Better BibTeX)──> references.bib
 
 **A vault is a Quarto project.** There is no conversion step and no intermediate
 file — `quarto render notes/x.md --to pdf` works on the note where it sits,
-while Obsidian still has it open. Two lines in the vault's `_quarto.yml` are
+while Obsidian still has it open. Two settings in the vault's `_quarto.yml` are
 what make that true:
 
 ```yaml
 from: markdown+wikilinks_title_after_pipe+mark
-filters: [obsidian]
+filters:
+  - at: pre-ast
+    path: _extensions/obsidian/obsidian.lua
 ```
 
 | Command | Does |
@@ -536,7 +538,11 @@ prose. **Never "fix" Obsidian syntax with a regex over a note.**
 Two things about this are load-bearing and were found the hard way, both of
 which fail *silently* — the build succeeds and the output is wrong:
 
-- **`at: pre-ast`.** The filter is declared in `_extension.yml` at the earliest
+- **The `render:` list.** Quarto applies `_quarto.yml` only to files in the
+  project's `render:` list; a note outside it renders with no reader
+  extensions, no filter and no PDF format, and reports no error. `notes/` is
+  in the list for that reason; `literature/` is deliberately not.
+- **`at: pre-ast`.** The filter is declared in `_quarto.yml` at the earliest
   phase. Measured: at `post-ast` or `pre-quarto`, callouts render fine in HTML
   but degrade in PDF to a plain quote with the title dropped — Quarto has
   already passed the point where it lowers callout divs into `tcolorbox`.

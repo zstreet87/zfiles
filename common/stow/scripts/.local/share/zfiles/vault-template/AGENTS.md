@@ -42,11 +42,13 @@ quarto preview notes/x.md              # live reload while editing in Obsidian
 ```
 
 `.md` notes and `.qmd` drafts are both valid input. What makes that work is two
-lines in `_quarto.yml`:
+settings in `_quarto.yml`:
 
 ```yaml
 from: markdown+wikilinks_title_after_pipe+mark
-filters: [obsidian]
+filters:
+  - at: pre-ast
+    path: _extensions/obsidian/obsidian.lua
 ```
 
 Pandoc handles `[[links]]`, `![[images]]` and `==highlights==` natively; the
