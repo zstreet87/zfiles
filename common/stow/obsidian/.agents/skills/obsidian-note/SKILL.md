@@ -9,17 +9,12 @@ Write material from this conversation into Zach's Obsidian vault as an edited re
 
 ## Vault location
 
-```
-/mnt/c/Users/zstreete/OneDrive - Advanced Micro Devices Inc/Documents/Obsidian Vault
-```
-
-Confirmed writable from WSL. If that path is gone, locate the vault with:
-
 ```bash
-find /mnt/c/Users/zstreete -maxdepth 5 -name ".obsidian" -type d 2>/dev/null
+obsidian-vault path      # the default vault, on any target
+obsidian-vault list      # every vault this machine knows about
 ```
 
-Note it lives in a corporate OneDrive folder, so anything written syncs. Don't put secrets, credentials, or proprietary source in a note.
+Never hardcode a vault path here: on WSL the default vault is a Windows path under the user's profile, and on Omarchy or a remote box it is not. The default vault may live in a corporate OneDrive folder, so anything written syncs. Don't put secrets, credentials, or proprietary source in a note.
 
 ## Usage
 
@@ -50,7 +45,7 @@ With no argument, save the substantive material from the current conversation an
 
 For Obsidian Flavored Markdown syntax — callouts, wikilinks, embeds, properties, block refs — defer to the `obsidian-markdown` skill from `kepano/obsidian-skills` if it's installed. Don't duplicate its reference material here. This skill covers the workflow; that one covers the syntax.
 
-**LaTeX is unrestricted here.** File writes are literal — `\,`, `\!`, `\;`, `\\` all survive intact, unlike the terminal display path (see the `latex-spacing-macros-break` memory, which applies to chat output only, NOT to notes). Obsidian renders math with MathJax, which is a superset of KaTeX. Write proper LaTeX.
+**LaTeX is unrestricted here.** File writes are literal — `\,`, `\!`, `\;`, `\\` all survive intact, unlike the terminal display path (a terminal display quirk that applies to chat output only, NOT to notes). Obsidian renders math with MathJax, which is a superset of KaTeX. Write proper LaTeX.
 
 - `$...$` inline, `$$...$$` for display
 - Put `$$` blocks on their own lines with a blank line above and below, or Obsidian won't parse them

@@ -224,8 +224,6 @@ local function embed_target(block)
   return target
 end
 
-local transclude_blocks
-
 --- Replace every bare ![[Note]] / ![[Note#Section]] with the note's content.
 --
 -- This is the one OFM feature with no Pandoc equivalent whatsoever, and the one
@@ -251,22 +249,16 @@ local function transclude(blocks, depth)
         warn('embedded note not found: ' .. target)
         out[#out + 1] = b
       else
-        local doc = pandoc.read(text, PANDOC_READER_OPTIONS
-          and 'markdown+wikilinks_title_after_pipe+mark'
-          or 'markdown+wikilinks_title_after_pipe+mark')
+        local doc = pandoc.read(text, 'markdown+wikilinks_title_after_pipe+mark')
         local sub = doc.blocks
         if section ~= '' then sub = extract_section(sub, section) end
-        for _, x in ipairs(transclude_blocks(sub, depth + 1)) do
+        for _, x in ipairs(transclude(sub, depth + 1)) do
           out[#out + 1] = x
         end
       end
     end
   end
   return out
-end
-
-transclude_blocks = function(blocks, depth)
-  return transclude(blocks, depth)
 end
 
 -- --- comments --------------------------------------------------------------

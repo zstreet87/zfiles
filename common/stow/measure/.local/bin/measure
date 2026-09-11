@@ -104,7 +104,10 @@ def git_state(root):
         "branch": git("rev-parse", "--abbrev-ref", "HEAD", cwd=root),
         # A dirty tree means the measurement is not reproducible from the SHA
         # alone. Recorded so recall can say so rather than implying it is.
-        "dirty": bool(git("status", "--porcelain", cwd=root)),
+        # The ledger itself is untracked until someone commits it, and it must
+        # not count -- otherwise the first `measure run` dirties every run after.
+        "dirty": bool(git("status", "--porcelain", "--", ".",
+                          ":(exclude).measurements", cwd=root)),
     }
 
 

@@ -9,9 +9,9 @@ Pandoc is not invoked directly here — Quarto bundles it and drives it. What yo
 edit is the **filter**.
 
 ```bash
-# The bundled binary, when you need to take Quarto out of the loop:
-PD=~/.local/share/quarto/bin/tools/x86_64/pandoc
-"$PD" note.md --from markdown+wikilinks_title_after_pipe+mark \
+# The bundled binary, when you need to take Quarto out of the loop.
+# `quarto pandoc` finds it wherever Quarto is installed; never hardcode its path.
+quarto pandoc note.md --from markdown+wikilinks_title_after_pipe+mark \
      --lua-filter _extensions/obsidian/obsidian.lua --to native   # AST
 ```
 
@@ -107,7 +107,7 @@ Gotchas that already cost debugging time:
 Round-trip to markdown — it shows the transformation without LaTeX noise:
 
 ```bash
-"$PD" note.md --from markdown+wikilinks_title_after_pipe+mark \
+quarto pandoc note.md --from markdown+wikilinks_title_after_pipe+mark \
      --lua-filter obsidian.lua --to markdown
 ```
 

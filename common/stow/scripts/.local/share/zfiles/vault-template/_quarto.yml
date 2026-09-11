@@ -50,6 +50,6 @@ format:
     # journal or arXiv wants source rather than a PDF.
     keep-tex: true
 
-# Written by Better BibTeX, or by `obsidian-cite sync`. Citations reach here as
+# Written by Better BibTeX's auto-export, never by hand. Citations reach here as
 # [[@citekey]] in a note, which the obsidian filter turns into a real citation.
 bibliography: references.bib

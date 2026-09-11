@@ -77,8 +77,7 @@ figure handling — has to be produced at `pre-ast`.**
    `quarto render x.md --to pdf 2>&1 | grep obsidian.lua`
 4. To take Quarto out of the picture, run the bundled Pandoc directly:
    ```bash
-   PD=~/.local/share/quarto/bin/tools/x86_64/pandoc
-   "$PD" x.md --from markdown+wikilinks_title_after_pipe+mark \
+   quarto pandoc x.md --from markdown+wikilinks_title_after_pipe+mark \
         --lua-filter _extensions/obsidian/obsidian.lua --to markdown
    ```
    If it works here but not under Quarto, the difference is phase or paths.
@@ -121,9 +120,8 @@ freeze cache, so executed output gets committed too.
 
 ## Install
 
-Not from apt on these machines (no sudo). Omarchy has `quarto-cli-bin` in
-`pkglist.txt`; WSL installs it user-local under `~/.local/share/quarto` with a
-symlink in `~/.local/bin`.
+Omarchy has `quarto-cli-bin` in `pkglist.txt`; `wsl/setup.sh` installs the
+official `.deb`. Wherever it landed, `quarto pandoc` reaches the bundled Pandoc.
 
 ## Related
 
