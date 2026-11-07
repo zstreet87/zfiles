@@ -189,6 +189,167 @@ eq "speech_only keeps speech, drops invented cues" "$(speech_only "$T/seg.txt" "
 touch "$T/rec/s2.mp4"
 spx status >/dev/null; spx prep >/dev/null 2>&1 && bad "stream-post prep took a recording still being written"
 
+# --- agent-sandbox (server half, against a fake docker) ---------------------
+# It runs from the session dir ssh-sandbox ships it to, as on a server.
+H=$T/ash; R=$H/.agent-sandbox
+mkdir -p "$R" "$H/.ssh"
+cp "$REPO/common/stow/sandbox/.local/bin/agent-sandbox" "$REPO/common/stow/sandbox/.local/share/agent-sandbox/agent-job" "$R/"
+AS=$R/agent-sandbox
+D=$T/docker; mkdir -p "$D/bin"
+# Fake docker: logs argv one per line; inspect answers from $D/{label,running}; rm drops it.
+cat > "$D/bin/docker" <<'EOF'
+#!/bin/sh
+case "$1" in run) case "$*" in *" cat "*) ;; *) [ -f "$D/label" ] && { echo "name in use" >&2; exit 125; }; printf '%s\n' "$@" > "$D/last"; echo 1 > "$D/label"; echo true > "$D/running" ;; esac; exit 0 ;; esac
+case "$1" in rm) rm -f "$D/label"; exit 0 ;; esac
+case "$*" in exec*agent-job\ running) [ -f "$D/jobfail" ] && exit 1; cat "$D/jobs" 2>/dev/null; exit 0 ;; esac
+printf '%s\n' "$@" > "$D/lastx"
+[ "$1" = inspect ] || exit 0
+[ -f "$D/label" ] || exit 1
+case "$*" in *Labels*) cat "$D/label" ;; *Running*) cat "$D/running" ;; esac
+EOF
+chmod +x "$D/bin/docker"
+ssh-keygen -q -t ed25519 -N '' -C t -f "$T/k"
+AK=$H/.ssh/authorized_keys; echo "ssh-rsa AAAAother keep" > "$AK"
+as() { env -i HOME="$H" USER=u D="$D" PATH="$D/bin:/usr/bin:/bin" "$AS" "$@"; }
+up() { as up --image img@sha256:ab "$@" < "$T/k.pub"; }
+up >/dev/null 2>&1 || bad "agent-sandbox up failed"
+for f in --cap-drop ALL no-new-privileges:true --read-only --pids-limit u_agent zfiles.agent-sandbox=1 \
+         AGENT_SANDBOX=1 AGENT_SANDBOX_IMAGE=img@sha256:ab --memory; do
+    grep -qx -- "$f" "$D/last" || bad "agent-sandbox up lacks $f"
+done
+eq "agent-sandbox network is off by default" "$(grep -A1 -x -- --network "$D/last" | tail -1)" none
+grep -qE -- '^--privileged|docker.sock|^seccomp=unconfined' "$D/last" && bad "agent-sandbox up loosened the sandbox"
+grep -q '^/tmp:rw,exec,' "$D/last" || bad "agent-sandbox /tmp is noexec (Docker's tmpfs default): JITs and pytest run binaries from it"
+grep -qx "$H/agent-sandbox/u_agent:/workspace:rw" "$D/last" || bad "agent-sandbox workspace mount wrong"
+grep -qx "$R/tools:/opt/agent-sandbox:ro" "$D/last" || bad "agent-sandbox tools not mounted read-only"
+[[ -x $R/tools/bin/rsync && -x $R/tools/bin/agent-job ]] || bad "agent-sandbox did not stage rsync and agent-job"
+grep -q -- '--library-path /opt/agent-sandbox/lib' "$R/tools/bin/rsync" || bad "staged tools not bound by --library-path"
+grep -rq LD_LIBRARY_PATH "$R/tools/bin" && bad "staged tools set LD_LIBRARY_PATH (tmux jobs would inherit it)"
+grep -q "^$(id -un):x:$(id -u):" "$R/tools/passwd" || bad "agent-sandbox passwd lacks our uid"
+blob=$(cut -d' ' -f2 "$T/k.pub")
+grep -q "^restrict,pty,expiry-time=\"[0-9]\{12\}\",command=\"$AS gate u_agent\" ssh-ed25519 $blob" "$AK" || bad "key line not restricted/expiring/forced: $(cat "$AK")"
+grep -q AAAAother "$AK" || bad "agent-sandbox dropped another key"
+up >/dev/null 2>&1; eq "re-up keeps one line for the key" "$(grep -c -- "$blob" "$AK")" 1
+up --name other >/dev/null 2>&1 && bad "up started a second session over a live one"
+echo "command=\"/bin/sh\" $(cat "$T/k.pub")" > "$T/opt.pub"
+as up --image i < "$T/opt.pub" >/dev/null 2>&1 && bad "up accepted a key carrying options"
+mkdir -p "$H/data"; up --mount "$H/data:/data" >/dev/null 2>&1 || bad "agent-sandbox refused a plain data mount"
+grep -qx "$H/data:/data:ro" "$D/last" || bad "agent-sandbox mount not read-only by default"
+for m in "$H" "$T" / /etc "$H/.ssh" "$R" "$H/nonexistent"; do
+    up --mount "$m:/x" >/dev/null 2>&1 && bad "agent-sandbox mounted $m"
+done
+up --privileged >/dev/null 2>&1 && bad "agent-sandbox accepted an unknown flag"
+# gate: the name comes from the key line; down / foreign containers refuse; the command
+# reaches the container as ONE argument.
+gate() { env -i HOME="$H" USER=u D="$D" PATH="$D/bin:/usr/bin:/bin" SSH_ORIGINAL_COMMAND="$1" "$AS" gate u_agent; }
+gate 'echo a; rm -rf ~' >/dev/null 2>&1
+eq "gate argv" "$(sed -n '1p;3p;$p' "$D/lastx" | tr '\n' '|')" "exec|u_agent|echo a; rm -rf ~|"
+eq "gate probe" "$(gate agent-sandbox-probe)" "agent-sandbox: gated u_agent"
+eq "gate audits each request, quoted, on the host" "$(tail -1 "$R/audit.log" | cut -d' ' -f2-)" "echo\\ a\\;\\ rm\\ -rf\\ ~"
+chmod 444 "$R/audit.log"; rm -f "$D/lastx"; gate id >/dev/null 2>&1
+grep -qx exec "$D/lastx" 2>/dev/null && bad "gate ran a command it could not audit"
+chmod 644 "$R/audit.log"
+as gate >/dev/null 2>&1 && bad "gate ran without a name"
+as gate 'x;y' >/dev/null 2>&1 && bad "gate accepted a hostile name"
+echo 0 > "$D/label"; rm -f "$D/lastx"; gate id >/dev/null 2>&1
+grep -qx exec "$D/lastx" 2>/dev/null && bad "gate exec'd into a foreign container"
+up >/dev/null 2>&1 && bad "up replaced a foreign container"
+echo 1 > "$D/label"
+# down refuses to end running jobs, or jobs it cannot list, unless --force.
+echo train > "$D/jobs"
+as down >/dev/null 2>&1 && bad "down removed a sandbox with a job running"
+up >/dev/null 2>&1 && bad "up recreated a sandbox with a job running"
+rm "$D/jobs"; touch "$D/jobfail"
+as down >/dev/null 2>&1 && bad "down removed a sandbox whose jobs it could not list"
+rm "$D/jobfail"
+# down: nothing left -- container, key line, workspace, session dir -- and other keys kept.
+as down >/dev/null 2>&1 || bad "agent-sandbox down failed"
+[[ -e $D/label ]] && bad "down left the container"
+grep -q -- "$blob" "$AK" && bad "down left the key line"
+grep -q AAAAother "$AK" || bad "down dropped another key"
+[[ -e $H/agent-sandbox || -e $R ]] && bad "down left files: $(ls -a "$H")"
+as down >/dev/null 2>&1 && bad "down succeeded with no session"
+
+# --- agent-job (real tmux, private socket dir) --------------------------------
+if command -v tmux >/dev/null; then
+AJ=$REPO/common/stow/sandbox/.local/share/agent-sandbox/agent-job
+mkdir -p "$T/aj/tmux" "$T/aj/w"
+aj() { (cd "$T/aj/w" && env -i HOME="$T/aj" PATH=/usr/bin:/bin TMUX_TMPDIR="$T/aj/tmux" "$AJ" "$@"); }
+id=$(aj start --name ok -- 'echo "it'"'"'s $((1+1))"; echo err >&2; exit 3')
+eq "agent-job start prints its id" "$id" ok
+aj wait ok 2>/dev/null; eq "agent-job wait returns the job's exit code" "$?" 3
+eq "agent-job status after exit" "$(aj status ok)" "exited 3"
+eq "agent-job log keeps stdout and stderr" "$(aj logs ok | tr '\n' ' ')" "it's 2 err "
+eq "agent-job runs from the caller's directory" "$(aj start --name pwd -- pwd >/dev/null; aj wait pwd 2>/dev/null; aj logs pwd)" "$T/aj/w"
+aj start --name long -- 'sleep 30' >/dev/null
+eq "agent-job running" "$(aj running)" long
+aj start --name long -- true >/dev/null 2>&1 && bad "agent-job started a second job under a running id"
+aj kill long >/dev/null; eq "agent-job status after kill" "$(aj status long)" killed
+gen=$(aj start -- true); [[ $gen =~ ^j[0-9]{8}-[0-9]{6}-[0-9]+$ ]] || bad "agent-job generated id: $gen"
+aj start --name '../x' -- true >/dev/null 2>&1 && bad "agent-job accepted a path as an id"
+aj status nope >/dev/null 2>&1 && bad "agent-job status of an unknown job succeeded"
+# A job whose tmux server vanished (the sandbox was recreated) reads 'lost', not running.
+aj start --name gone -- 'sleep 30' >/dev/null; env TMUX_TMPDIR="$T/aj/tmux" tmux -L agent-jobs kill-server
+eq "agent-job status of a job whose server died" "$(aj status gone)" lost
+# As the host's docker exec calls it: no tmux on PATH, the staged one beside agent-job.
+mkdir -p "$T/aj/stage" "$T/aj/nobin"; cp "$AJ" "$T/aj/stage/"; ln -sf "$(command -v tmux)" "$T/aj/stage/tmux"
+for c in sh date cat mkdir rm pwd printf head basename dirname sleep tee mv touch tail; do ln -sf "$(command -v $c)" "$T/aj/nobin/$c"; done
+ajs() { (cd "$T/aj/w" && env -i HOME="$T/aj" PATH="$T/aj/nobin" TMUX_TMPDIR="$T/aj/tmux" "$T/aj/stage/agent-job" "$@"); }
+ajs start --name staged -- 'sleep 30' >/dev/null
+eq "agent-job finds the staged tmux beside it" "$(ajs running)" staged
+ajs kill staged >/dev/null
+fi
+
+# --- agent-jail (real bubblewrap, fake home) ----------------------------------
+if command -v bwrap >/dev/null && bwrap --ro-bind / / true 2>/dev/null; then
+AJL=$REPO/common/stow/sandbox/.local/bin/agent-jail
+JH=$T/jail; mkdir -p "$JH/.ssh/agent" "$JH/.config/gh" "$JH/.config/gh-work" "$JH/.config/agent-jail" "$JH/notes"
+for f in id_ed25519 agent_sandbox agent_sandbox.pub config known_hosts; do echo "secret-$f" > "$JH/.ssh/$f"; done
+echo token > "$JH/.config/gh/hosts.yml"; echo token > "$JH/.config/gh-work/hosts.yml"; echo mine > "$JH/notes/private"; echo work > "$JH/notes/ok"
+printf '%s\n' '# extra' "$JH/notes/private" > "$JH/.config/agent-jail/hide"
+jl() { env -i HOME="$JH" PATH=/usr/bin:/bin SSH_AUTH_SOCK="$JH/.ssh/agent/socket" GH_TOKEN=t "$AJL" "$@"; }
+eq "jail ~/.ssh keeps only the sandbox key and config" "$(jl ls "$JH/.ssh" | tr '\n' ' ')" "agent_sandbox agent_sandbox.pub config known_hosts "
+eq "jail sandbox key readable" "$(jl cat "$JH/.ssh/agent_sandbox")" "secret-agent_sandbox"
+jl cat "$JH/.ssh/id_ed25519" >/dev/null 2>&1 && bad "jail exposed the real key"
+eq "jail empties token stores" "$(jl ls -A "$JH/.config/gh" "$JH/.config/gh-work" | grep -c hosts)" 0
+eq "jail hides extra paths from its hide file" "$(jl cat "$JH/notes/private" 2>/dev/null)" ""
+eq "jail leaves the rest of home alone" "$(jl cat "$JH/notes/ok")" work
+eq "jail drops agent and token env" "$(jl sh -c 'echo "${SSH_AUTH_SOCK-}${GH_TOKEN-}"')" ""
+eq "jail passes the exit code" "$(jl sh -c 'exit 7'; echo $?)" 7
+jl "$AJL" true >/dev/null 2>&1 && bad "jail nested inside itself"
+fi
+
+# --- ssh-sandbox (alias writing + the safety check, against a fake ssh -G) ----
+SS=$REPO/common/stow/sandbox/.local/bin/ssh-sandbox
+mkdir -p "$T/sshbin"
+cat > "$T/sshbin/ssh" <<'EOF'
+#!/bin/sh
+[ "$1" = -G ] || exit 1
+case $2 in
+  *-agent) awk -v a="$2" '$0=="Host "a{on=1;next} /^Host /{on=0} on&&NF{print tolower($1), $2}' "$CONF"; cat "$EXTRA" ;;
+  *) printf 'hostname %s.example\nuser me\nport 22\n' "$2" ;;
+esac
+EOF
+chmod +x "$T/sshbin/ssh"; : > "$T/extra"
+ss() { env -i HOME="$T/ssh" PATH="$T/sshbin:/usr/bin:/bin" CONF="$T/ssh/c.conf" EXTRA="$T/extra" \
+    AGENT_SANDBOX_SSH_CONF="$T/ssh/c.conf" AGENT_SANDBOX_KEY="$T/ssh/k" "$SS" "$@"; }
+ss config node1 >/dev/null 2>&1 && ss config node1 >/dev/null 2>&1 && ss config node2 >/dev/null 2>&1 || bad "ssh-sandbox config failed"
+eq "ssh-sandbox config idempotent" "$(ss list | tr '\n' ' ')" "node1-agent node2-agent "
+grep -q 'HostName node1.example' "$T/ssh/c.conf" || bad "ssh-sandbox config lost the hostname"
+ss check node1-agent >/dev/null 2>&1 || bad "ssh-sandbox check rejected a clean alias"
+echo "identityfile ~/.ssh/id_ed25519" > "$T/extra"
+ss check node1-agent >/dev/null 2>&1 && bad "ssh-sandbox check passed an alias that also offers the real key"
+echo "controlpath ~/.ssh/cm/%r@%h:%p" > "$T/extra"; sed -i '/ControlPath none/d' "$T/ssh/c.conf"
+ss check node1-agent >/dev/null 2>&1 && bad "ssh-sandbox check passed a shared ControlPath"
+ss config node1 >/dev/null 2>&1
+echo "proxycommand nc %h %p" > "$T/extra"
+ss check node1-agent >/dev/null 2>&1 && bad "ssh-sandbox check passed a ProxyCommand"
+ss config 'x;rm' >/dev/null 2>&1 && bad "ssh-sandbox accepted a hostile host name"
+ss config -oProxyCommand >/dev/null 2>&1 && bad "ssh-sandbox accepted a host name that is an ssh option"
+ss down node1 >/dev/null 2>&1 && bad "ssh-sandbox down ran without --fetch or --discard (it deletes the workspace)"
+mkdir -p "$T/ssh/.config/agent-sandbox"; echo "--image x" > "$T/ssh/.config/agent-sandbox/node1"; chmod 666 "$T/ssh/.config/agent-sandbox/node1"
+o=$(ss up node1 2>&1); grep -q "not group/world writable" <<<"$o" || bad "ssh-sandbox read world-writable host defaults: $o"
+
 # --- target contract (bootstrap --plan: resolve, print, touch nothing) --------
 plan() { env -i HOME="$T/planhome" PATH=/usr/bin:/bin "$@" "$REPO/bootstrap.sh" --plan 2>&1; }
 for t in omarchy wsl linux remote; do

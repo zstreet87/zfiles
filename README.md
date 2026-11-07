@@ -158,6 +158,73 @@ just what's running inside one of its panes.
 To re-run later, `zfiles-update` (defined in the `shell` package's
 `commands.sh`) pulls and re-bootstraps whichever checkout it finds.
 
+### Agent sandbox on remote servers
+
+Agents never get your key or a forwarded agent. They get one dedicated key,
+`~/.ssh/agent_sandbox`, which a server accepts only for the length of a
+*session*, and only into a hardened container (the `sandbox` package:
+`agent-jail` and `ssh-sandbox` on the laptop, `agent-sandbox` shipped to the
+server per session, `agent-job` for durable work, the `remote-sandbox` skill for
+agents). Why each mechanism, with sources: `docs/agent-sandbox-research.md`.
+
+```bash
+agent-jail pi                                      # the agent, with your credentials out of reach
+ssh-sandbox up node1 --image IMG@sha256:...        # ship, start, authorize the key (12h)
+ssh node1-agent 'nproc'                            # what the agent does: runs inside it
+ssh node1-agent 'agent-job start --name train -- python3 train.py'   # survives a dropped link
+ssh node1-agent 'agent-job wait train'             # after any reconnect: its exit code
+ssh -t node1-agent 'agent-job attach train'        # watch it live (a herdr pane, say)
+ssh-sandbox down node1 --fetch ~/results/node1     # or --discard; refuses while jobs run
+```
+
+Per-host defaults (image, name, `--shm-size`, `--network bridge` when the work
+needs downloads) go one-or-more flags per line in `~/.config/agent-sandbox/<host>`
+on the laptop; `agent-sandbox --help` lists them.
+
+**A session leaves nothing.** `up` ships `agent-sandbox` into `~/.agent-sandbox/`,
+creates the workspace and adds one `authorized_keys` line; `down` copies
+`/workspace` back (`--fetch`) or drops it (`--discard`), then removes the
+container (and its anonymous volumes), the key line, the workspace and
+`~/.agent-sandbox/`, and fails if any of it is still there. What remains is
+what any ssh login leaves: the server's own auth logs, and the modification
+times of `~/.ssh/authorized_keys` and its directories. If `down` never runs, the
+key line's `expiry-time` (`--ttl`, default 12h) still shuts the key out.
+
+What holds, and why:
+
+- **The agent cannot reach your real credentials.** `agent-jail` (bubblewrap)
+  shows it a `~/.ssh` holding only the sandbox key and ssh config, removes the
+  ssh-agent and gpg-agent sockets, and empties token stores (`gh`, `.aws`,
+  `secrets.env`, ...; add more in `~/.config/agent-jail/hide`). A check inside
+  the jail proves each hidden path unreadable before the command starts. Without
+  this layer, an agent could `ssh node1` with your key and skip everything below.
+
+- **The key cannot reach the host.** Its `authorized_keys` line is
+  `restrict,expiry-time=...,command="agent-sandbox gate NAME"`; whatever the
+  client asks for is handed to the container's shell as one string. No agent,
+  port or X11 forwarding, no `~/.ssh/rc`. Lifecycle needs your normal key.
+- **The alias cannot fall back to your real key.** `IdentityFile` accumulates
+  across `Host` blocks, and a shared `ControlPath` would ride an open login, so
+  `ssh-sandbox up` refuses an alias that offers any other key, forwards
+  anything, or multiplexes.
+- **The container:** your uid, no capabilities, `no-new-privileges`, read-only
+  root, no network unless asked, memory capped at half the host's RAM,
+  size-capped `/tmp`, pid limit, default seccomp, private IPC, only
+  `/workspace` writable. GPUs by device, never `--privileged`, never the docker
+  socket. Mount sources are refused if they are home, a dot-directory, a system
+  path, a socket, or contain the script.
+
+**Every request is audited**: the gate, on the host where the agent cannot
+reach it, logs each command before running it (and refuses if it cannot);
+`ssh-sandbox down` saves the log to `~/.local/state/agent-sandbox/`.
+
+What does not: `agent-jail` leaves the laptop's network open and hides only the
+credential paths it knows. An agent started outside it is not contained at all.
+You are in the `docker` group, so a Docker or kernel escape is an escape to
+root; the sandbox stops an agent, not an exploit. There is no disk quota on the
+workspace. `--network bridge`/`host`, `--ipc host`, `--seccomp-unconfined` and
+`--rw-root` each warn when used.
+
 ### The bash hook
 
 `~/.bashrc` is **appended to, not replaced**. Bootstrap adds an idempotent
