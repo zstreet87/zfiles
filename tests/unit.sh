@@ -5,6 +5,9 @@
 #
 # Scripts run against a throwaway $HOME, never the real one.
 set -uo pipefail
+# A hook exports GIT_DIR (always, from a worktree): every fixture repo below would
+# then commit into this one. Seen: a push from a worktree flipped core.bare.
+unset $(git rev-parse --local-env-vars)
 cd "$(dirname "$0")/.."
 REPO=$PWD
 
@@ -233,6 +236,11 @@ blob=$(cut -d' ' -f2 "$T/k.pub")
 grep -q "^restrict,pty,expiry-time=\"[0-9]\{12\}\",command=\"$AS gate u_agent\" ssh-ed25519 $blob" "$AK" || bad "key line not restricted/expiring/forced: $(cat "$AK")"
 grep -q AAAAother "$AK" || bad "agent-sandbox dropped another key"
 up >/dev/null 2>&1; eq "re-up keeps one line for the key" "$(grep -c -- "$blob" "$AK")" 1
+up --workspace "$T/elsewhere" >/dev/null 2>&1 && bad "re-up switched the workspace of a live session (down would delete the wrong one)"
+up --from '100.64.0.1,fd7a:115c:a1e0::1' >/dev/null 2>&1 || bad "up refused tailnet --from addresses"
+grep -q "^restrict,pty,from=\"100.64.0.1,fd7a:115c:a1e0::1\",expiry-time=" "$AK" || bad "--from not on the key line: $(cat "$AK")"
+up --from '1.2.3.4" ,command="sh' >/dev/null 2>&1 && bad "up accepted a --from that injects key options"
+up >/dev/null 2>&1; grep -q 'from=' "$AK" && bad "re-up without --from kept the old restriction"
 up --name other >/dev/null 2>&1 && bad "up started a second session over a live one"
 echo "command=\"/bin/sh\" $(cat "$T/k.pub")" > "$T/opt.pub"
 as up --image i < "$T/opt.pub" >/dev/null 2>&1 && bad "up accepted a key carrying options"
@@ -259,8 +267,9 @@ grep -qx exec "$D/lastx" 2>/dev/null && bad "gate exec'd into a foreign containe
 up >/dev/null 2>&1 && bad "up replaced a foreign container"
 echo 1 > "$D/label"
 # down refuses to end running jobs, or jobs it cannot list, unless --force.
-echo train > "$D/jobs"
-as down >/dev/null 2>&1 && bad "down removed a sandbox with a job running"
+printf 'train\033]0;pwned\007\n' > "$D/jobs"
+o=$(as down 2>&1) && bad "down removed a sandbox with a job running"
+[[ $o == *$'\033'* ]] && bad "down echoed the container's escape sequences to the terminal"
 up >/dev/null 2>&1 && bad "up recreated a sandbox with a job running"
 rm "$D/jobs"; touch "$D/jobfail"
 as down >/dev/null 2>&1 && bad "down removed a sandbox whose jobs it could not list"
@@ -324,8 +333,20 @@ eq "jail empties token stores" "$(jl ls -A "$JH/.config/gh" "$JH/.config/gh-work
 eq "jail hides extra paths from its hide file" "$(jl cat "$JH/notes/private" 2>/dev/null)" ""
 eq "jail leaves the rest of home alone" "$(jl cat "$JH/notes/ok")" work
 eq "jail drops agent and token env" "$(jl sh -c 'echo "${SSH_AUTH_SOCK-}${GH_TOKEN-}"')" ""
+eq "jail gives ssh drop-ins it accepts (root reads as nobody in the jail)" "$(jl find /etc/ssh/ssh_config.d -name '*.conf' \( ! -user "$(id -u)" -o -perm /022 \) 2>/dev/null)" ""
 eq "jail passes the exit code" "$(jl sh -c 'exit 7'; echo $?)" 7
 jl "$AJL" true >/dev/null 2>&1 && bad "jail nested inside itself"
+# Nothing written under home may run later outside the jail; the project stays writable.
+mkdir -p "$JH/proj" "$JH/.pi" "$JH/.rt"; git -C "$JH/proj" init -q; echo .pi > "$JH/.config/agent-jail/rw"; : > "$JH/.rt/bus"
+jp() { (cd "$JH/proj" && env -i HOME="$JH" PATH=/usr/bin:/bin XDG_RUNTIME_DIR="$JH/.rt" DBUS_SESSION_BUS_ADDRESS="unix:path=$JH/.rt/bus" "$AJL" "$@"); }
+eq "jail home is read-only" "$(jp sh -c '(: > "$HOME/.zshrc") 2>/dev/null && echo rw || echo ro')" ro
+eq "jail project is writable" "$(jp sh -c ': > f && echo rw')" rw
+eq "jail rw file makes agent state writable" "$(jp sh -c ': > "$HOME/.pi/s" && echo rw')" rw
+eq "jail keeps .git/config read-only" "$(jp sh -c 'git config x.y z 2>/dev/null && echo rw || echo ro')" ro
+eq "jail keeps .git/hooks read-only" "$(jp sh -c '(: > .git/hooks/pre-commit) 2>/dev/null && echo rw || echo ro')" ro
+eq "jail hides the session runtime dir (D-Bus, systemd --user)" "$(jp sh -c 'ls -A "$XDG_RUNTIME_DIR"; echo "${DBUS_SESSION_BUS_ADDRESS-}"')" ""
+outside=$(mktemp); jp test -e "$outside" && bad "jail shares /tmp (tmux and X11 sockets live there)"; rm -f "$outside"
+(cd "$JH" && env -i HOME="$JH" PATH=/usr/bin:/bin "$AJL" true >/dev/null 2>&1) && bad "jail made the whole home writable"
 fi
 
 # --- ssh-sandbox (alias writing + the safety check, against a fake ssh -G) ----
@@ -333,13 +354,18 @@ SS=$REPO/common/stow/sandbox/.local/bin/ssh-sandbox
 mkdir -p "$T/sshbin"
 cat > "$T/sshbin/ssh" <<'EOF'
 #!/bin/sh
-[ "$1" = -G ] || { printf '%s\n' "$@" > "$T_SSHLOG"; exit 0; }
+[ "$1" = -G ] || { printf '%s\n' "$@" >> "$T_SSHLOG"; exit 0; }
 case $2 in
   *-agent) awk -v a="$2" '$0=="Host "a{on=1;next} /^Host /{on=0} on&&NF{print tolower($1), $2}' "$CONF"; cat "$EXTRA" ;;
   *) printf 'hostname %s.example\nuser me\nport 22\n' "$2" ;;
 esac
 EOF
-chmod +x "$T/sshbin/ssh"; : > "$T/extra"
+# Fake Tailscale: this laptop is 100.64.0.1; node5 is a peer, node1 is not.
+cat > "$T/sshbin/tailscale" <<'EOF'
+#!/bin/sh
+case "$*" in "ip") printf '100.64.0.1\nfd7a:115c:a1e0::1\n' ;; "ip -4 node5.example" | "ip -4 100.64.0.5") echo 100.64.0.5 ;; *) exit 1 ;; esac
+EOF
+chmod +x "$T/sshbin/ssh" "$T/sshbin/tailscale"; : > "$T/extra"
 ss() { env -i HOME="$T/ssh" PATH="$T/sshbin:/usr/bin:/bin" CONF="$T/ssh/c.conf" EXTRA="$T/extra" T_SSHLOG="$T/sshlog" \
     AGENT_SANDBOX_SSH_CONF="$T/ssh/c.conf" AGENT_SANDBOX_KEY="$T/ssh/k" "$SS" "$@"; }
 ss config node1 >/dev/null 2>&1 && ss config node1 >/dev/null 2>&1 && ss config node2 >/dev/null 2>&1 || bad "ssh-sandbox config failed"
@@ -358,7 +384,17 @@ ss config -oProxyCommand >/dev/null 2>&1 && bad "ssh-sandbox accepted a host nam
 ss config me@node3 >/dev/null 2>&1; grep -qx 'Host node3-agent' "$T/ssh/c.conf" || bad "user@host did not give the alias host-agent"
 # Server-side commands go through sh -c whatever the login shell, args quoted for sh.
 ss status node1 >/dev/null 2>&1
-eq "server commands run via sh -c" "$(tail -1 "$T/sshlog")" "sh -c '~/.agent-sandbox/agent-sandbox status '"
+eq "server commands run via sh -c" "$(tail -1 "$T/sshlog" | cut -c1-7)" "sh -c '"
+# Over Tailscale the alias dials the peer's tailnet address and up binds the key to ours.
+: > "$T/extra"; ss up node5 --mount "/my data:/d" >/dev/null 2>&1
+grep -q 'HostName 100.64.0.5' "$T/ssh/c.conf" || bad "ssh-sandbox alias for a tailnet peer not on its tailnet address"
+mkdir -p "$T/rs/.agent-sandbox"; printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$T/rs/.agent-sandbox/agent-sandbox"; chmod +x "$T/rs/.agent-sandbox/agent-sandbox"
+args=$(grep -F "agent-sandbox '\\''up'" "$T/sshlog" | tail -1)
+eq "up args reach the server intact, with the tailnet --from" "$(HOME="$T/rs" sh -c "$args" | tr '\n' '|')" "up|--from|100.64.0.1,fd7a:115c:a1e0::1|--mount|/my data:/d|"
+: > "$T/sshlog"; ss up node1 >/dev/null 2>&1; grep -q -- --from "$T/sshlog" && bad "ssh-sandbox bound a non-tailnet session to tailnet addresses"
+grep -q 'HostName node1.example' "$T/ssh/c.conf" || bad "ssh-sandbox moved a non-peer onto a tailnet address"
+mkdir -p "$T/fetched"; echo mine > "$T/fetched/f"
+o=$(ss down node1 --fetch "$T/fetched" 2>&1); grep -q "not empty" <<<"$o" || bad "ssh-sandbox fetched into a non-empty directory: $o"
 ss down node1 >/dev/null 2>&1 && bad "ssh-sandbox down ran without --fetch or --discard (it deletes the workspace)"
 mkdir -p "$T/ssh/.config/agent-sandbox"; echo "--image x" > "$T/ssh/.config/agent-sandbox/node1"; chmod 666 "$T/ssh/.config/agent-sandbox/node1"
 o=$(ss up node1 2>&1); grep -q "not group/world writable" <<<"$o" || bad "ssh-sandbox read world-writable host defaults: $o"

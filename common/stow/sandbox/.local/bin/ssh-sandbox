@@ -18,12 +18,19 @@ MSSH=(ssh -o ForwardAgent=no -o ClearAllForwardings=yes -o ForwardX11=no)
 
 die() { echo "ssh-sandbox: $*" >&2; exit 1; }
 
+# Tailscale (omarchy install service tailscale): the tailnet address of peer $1, and
+# this laptop's own addresses. Either fails when Tailscale is absent, down, or $1 is
+# not a peer.
+tailnet_peer() { local ip; command -v tailscale >/dev/null && ip=$(tailscale ip -4 "$1" 2>/dev/null | head -1) && [[ -n $ip ]] && echo "$ip"; }
+tailnet_self() { local ips; command -v tailscale >/dev/null && ips=$(tailscale ip 2>/dev/null | paste -sd, -) && [[ -n $ips ]] && echo "$ips"; }
+
 usage() {
     cat <<EOF
 usage: ssh-sandbox <command> ...
   up HOST [opts]            start a session: ship agent-sandbox, fresh container, authorize
                             the key until --ttl. opts: agent-sandbox --help; defaults, one
-                            or more per line, from $HOSTS/HOST (HOST without user@)
+                            or more per line, from $HOSTS/HOST (HOST without user@).
+                            Over Tailscale the key is accepted only from this laptop.
   down HOST --fetch DIR     copy /workspace to DIR, then remove everything the session put
   down HOST --discard       on HOST and verify it. --force also ends running jobs. The
                             session's audit log is always saved to $AUDIT/.
@@ -49,13 +56,16 @@ cmd_keygen() {
 
 # Replace ALIAS's block in CONF with one built from HOST's resolved settings.
 cmd_config() {
-    local host=$1 alias=${2:-${1##*@}-agent} g hn user port pj tmp
+    local host=$1 alias=${2:-${1##*@}-agent} g hn user port pj tmp tip
     name_ok "$host"; name_ok "$alias"
     g=$(ssh -G "$host") || die "ssh -G $host failed"
     hn=$(awk '$1=="hostname"{print $2; exit}' <<<"$g")
     user=$(awk '$1=="user"{print $2; exit}' <<<"$g")
     port=$(awk '$1=="port"{print $2; exit}' <<<"$g")
     pj=$(awk '$1=="proxyjump"{print $2; exit}' <<<"$g")
+    # On a tailnet, reach the server by its tailnet address: then the source address
+    # is this laptop's, and up can bind the key to it.
+    if [[ -z $pj || $pj == none ]] && tip=$(tailnet_peer "$hn"); then hn=$tip; fi
     (umask 077 && mkdir -p "$(dirname "$CONF")"); touch "$CONF"
     tmp=$(mktemp)
     awk -v a="$alias" '$0=="# >>> "a{skip=1} !skip{print} $0=="# <<< "a{skip=0}' "$CONF" >"$tmp"
@@ -123,19 +133,27 @@ host_defaults() {
 # Every command on the server goes through sh -c: the login shell there may be csh or fish.
 sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 on() { local host=$1; shift; "${MSSH[@]}" "$host" "sh -c $(sq "$*")"; }
-remote() { local host=$1; shift; on "$host" "$REMOTE $(printf '%q ' "$@")"; }
+remote() { local host=$1 a q=""; shift; for a in "$@"; do q+=" $(sq "$a")"; done; on "$host" "$REMOTE$q"; }
 
 cmd_up() {
-    local host=$1 alias=${1##*@}-agent out DEFAULTS=(); shift
+    local host=$1 alias=${1##*@}-agent out hn self DEFAULTS=() FROM=(); shift
     name_ok "$host"
     host_defaults "$host"
     cmd_keygen
-    ssh -G "$alias" 2>/dev/null | grep -qx "identityfile ${KEY/#$HOME/\~}\|identityfile $KEY" || cmd_config "$host" "$alias"
+    cmd_config "$host" "$alias" # every session: the server's address may have moved onto the tailnet
     cmd_check "$alias"
+    hn=$(ssh -G "$alias" | awk '$1=="hostname"{print $2; exit}')
+    # Bound to this laptop's tailnet addresses, a copied key opens nothing anywhere else.
+    if tailnet_peer "$hn" >/dev/null && self=$(tailnet_self); then
+        FROM=(--from "$self")
+        echo "ssh-sandbox: over Tailscale; the key works only from $self"
+    else
+        echo "ssh-sandbox: not over Tailscale; the key works from any address until it expires" >&2
+    fi
     # Ship this session's copy; down deletes it.
     on "$host" 'umask 077 && mkdir -p ~/.agent-sandbox && cat > ~/.agent-sandbox/agent-sandbox && chmod 700 ~/.agent-sandbox/agent-sandbox' <"$HERE/agent-sandbox"
     on "$host" 'umask 077 && cat > ~/.agent-sandbox/agent-job && chmod 755 ~/.agent-sandbox/agent-job' <"$HERE/../share/agent-sandbox/agent-job"
-    if ! remote "$host" up "${DEFAULTS[@]}" "$@" <"$KEY.pub"; then
+    if ! remote "$host" up "${DEFAULTS[@]}" "${FROM[@]}" "$@" <"$KEY.pub"; then
         # A failed first up leaves no session to tear down: remove what we shipped.
         on "$host" 'test -f ~/.agent-sandbox/session || rm -rf ~/.agent-sandbox'
         die "up failed on $host"
@@ -145,6 +163,8 @@ cmd_up() {
     grep -q '^agent-sandbox: gated ' <<<"$out" || die "the key does not land in the gate on $host: $out"
     echo "ssh-sandbox: agents use '$alias'. End the session with: ssh-sandbox down $host --fetch DIR | --discard"
 }
+
+rsync_ok() { local v; v=$(rsync --version | awk 'NR==1{print $3}'); [[ $(printf '%s\n' 3.4.0 "${v%%-*}" | sort -V | head -1) == 3.4.0 ]]; }
 
 cmd_down() {
     local host=$1 fetch="" discard=0 force=() out log; shift
@@ -159,6 +179,11 @@ cmd_down() {
     done
     [[ -n $fetch || $discard == 1 ]] || die "down deletes the workspace: pass --fetch DIR to keep it, or --discard"
     if [[ -n $fetch ]]; then
+        # The agent controls the rsync that answers, so: a fresh directory (nothing of
+        # yours to overwrite, no repo whose hooks it could plant) and an rsync without
+        # the --safe-links bypass (CVE-2024-12088, fixed in 3.4.0).
+        [[ ! -e $fetch || -z $(ls -A "$fetch") ]] || die "--fetch $fetch is not empty: give a new directory"
+        rsync_ok || die "rsync $(rsync --version | awk 'NR==1{print $3}') predates 3.4.0 (CVE-2024-12088): update it before fetching"
         mkdir -p "$fetch"
         # The agent wrote these files: --safe-links drops symlinks that point outside DIR.
         rsync -a --safe-links "${host##*@}-agent:/workspace/" "$fetch/" || die "fetch failed; nothing removed"

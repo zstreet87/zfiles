@@ -38,6 +38,18 @@ Inside: the real key unreadable, the ssh-agent unreachable, `ssh` to the real ho
 (real login) denied, `gh` tokens and `secrets.env` gone; HTTPS to the model API
 still works.
 
+**Escapes found in review (verified, then closed).** Hiding secrets is not enough
+while the jail can ask something outside it to read them. With only the above, a
+jailed `systemd-run --user --wait -P cat <hidden file>` printed it: the session bus
+in `$XDG_RUNTIME_DIR` starts any command as you, unjailed (`systemctl --user`,
+the keyring's Secret Service and the Wayland socket sit beside it; tmux and X11
+sockets sit in `/tmp`). And a writable home let it plant `~/.zshrc` or a
+`systemd --user` unit that runs outside the jail at your next login. Now the
+runtime dir and `/tmp` are empty tmpfs, home is `--ro-bind` with only the current
+directory and listed agent state writable, and `.git/{config,hooks}` read-only.
+`/proc/<outside pid>/{root,environ}` were already refused (ptrace access check
+across the user namespace). Verified on this laptop, and in `tests/unit.sh`.
+
 Design choices to make when it becomes a script:
 
 - **Denylist vs allowlist.** The prototype binds `/` and hides known secrets: easy,
@@ -85,6 +97,17 @@ Built: `ssh-sandbox check`.
 a per-user `cert-authority` line trusts the CA without root, and a key's
 `command=` must match a certificate's `force-command` exactly. [ssh-keygen(1)][keygen], [sshd(8)][sshd]
 Marginal over `expiry-time` for a few hosts.
+
+**Binding the key to one laptop: `from=` over Tailscale.** `authorized_keys`
+`from="pattern-list"` makes sshd accept the key only from matching source
+addresses (sshd(8), AUTHORIZED_KEYS FILE FORMAT). On the open internet or a LAN
+the laptop's address moves, so it cannot be pinned; on a tailnet it is fixed per
+device (`tailscale ip`) and WireGuard authenticates it, so a key copied off the
+laptop opens nothing from another machine. `ssh-sandbox up` uses it when the
+server is a tailnet peer (`tailscale ip -4 HOST` resolves) and there is no
+ProxyJump (which would change the source address). Tailscale SSH was not used:
+it authorizes by ACL, without `authorized_keys`, so there is no forced command
+to put the gate in.
 
 ## 3. Server: what code in the sandbox can reach
 

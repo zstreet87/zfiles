@@ -168,7 +168,7 @@ server per session, `agent-job` for durable work, the `remote-sandbox` skill for
 agents). Why each mechanism, with sources: `docs/agent-sandbox-research.md`.
 
 ```bash
-agent-jail pi                                      # the agent, with your credentials out of reach
+cd ~/proj && agent-jail pi                         # the agent: credentials out of reach, only ~/proj writable
 ssh-sandbox up node1 --image IMG@sha256:...        # ship, start, authorize the key (12h)
 ssh node1-agent 'nproc'                            # what the agent does: runs inside it
 ssh node1-agent 'agent-job start --name train -- python3 train.py'   # survives a dropped link
@@ -193,11 +193,27 @@ key line's `expiry-time` (`--ttl`, default 12h) still shuts the key out.
 What holds, and why:
 
 - **The agent cannot reach your real credentials.** `agent-jail` (bubblewrap)
-  shows it a `~/.ssh` holding only the sandbox key and ssh config, removes the
-  ssh-agent and gpg-agent sockets, and empties token stores (`gh`, `.aws`,
-  `secrets.env`, ...; add more in `~/.config/agent-jail/hide`). A check inside
-  the jail proves each hidden path unreadable before the command starts. Without
+  shows it a `~/.ssh` holding only the sandbox key and ssh config, and empties
+  token stores and browser profiles (`gh`, `.aws`, `secrets.env`, Chromium,
+  Firefox, ...; add more in `~/.config/agent-jail/hide`). Your session's sockets
+  are gone too -- `$XDG_RUNTIME_DIR` (ssh/gpg agents, D-Bus, `systemd --user`,
+  Wayland, the keyring) and `/tmp` (tmux, X11) -- since any of them runs a
+  command outside the jail (`systemd-run --user cat ~/.ssh/id_ed25519`). Without
   this layer, an agent could `ssh node1` with your key and skip everything below.
+- **Nothing it writes runs later as you.** Home is read-only except the current
+  directory and the paths in `~/.config/agent-jail/rw` (the agent's own state,
+  e.g. `.pi`), so it cannot plant a line in `~/.zshrc`, `~/.config/systemd/user`
+  or `~/.local/bin`. In a git repo, `.git/config` and `.git/hooks` stay read-only
+  (`core.fsmonitor` and hooks run commands). A check inside the jail proves all
+  of the above before the command starts. Anything listed in `rw` the agent can
+  rewrite, so list only state, never config that runs commands.
+- **On a tailnet, the key is bound to this laptop.** With Tailscale up on both
+  ends (`omarchy install service tailscale` here), `ssh-sandbox up` points the
+  alias at the server's tailnet address and adds `from="<this laptop's tailnet
+  IPs>"` to the key line, so a copied sandbox key opens nothing from anywhere
+  else, LAN included. Without Tailscale `up` says so and the key works from any
+  address until it expires. Tighten further in the Tailscale ACLs: allow
+  `tcp:22` to the servers only from your own devices.
 
 - **The key cannot reach the host.** Its `authorized_keys` line is
   `restrict,expiry-time=...,command="agent-sandbox gate NAME"`; whatever the
@@ -217,9 +233,14 @@ What holds, and why:
 **Every request is audited**: the gate, on the host where the agent cannot
 reach it, logs each command before running it (and refuses if it cannot);
 `ssh-sandbox down` saves the log to `~/.local/state/agent-sandbox/`.
+`--fetch` needs a new or empty directory and rsync 3.4.0 or newer: the agent
+controls the rsync that answers, and older clients let it bypass `--safe-links`
+(CVE-2024-12088).
 
-What does not: `agent-jail` leaves the laptop's network open and hides only the
-credential paths it knows. An agent started outside it is not contained at all.
+What does not: `agent-jail` leaves the laptop's network open (abstract unix
+sockets included, so an X server listening on one stays reachable) and hides only
+the credential paths it knows; a project you jail it in can be poisoned for when
+you next build or run it there. An agent started outside it is not contained at all.
 You are in the `docker` group, so a Docker or kernel escape is an escape to
 root; the sandbox stops an agent, not an exploit. There is no disk quota on the
 workspace. `--network bridge`/`host`, `--ipc host`, `--seccomp-unconfined` and

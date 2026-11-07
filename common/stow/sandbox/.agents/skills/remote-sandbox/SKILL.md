@@ -40,10 +40,15 @@ the only handle on the work after a reconnect.
 ## When it refuses
 
 `sandbox '<name>' is not running`, or `Permission denied (publickey)`, means no
-session is open (or its key expired). Starting, ending and reconfiguring a session
+session is open, its key expired, or (a session bound to the laptop's Tailscale
+addresses) the connection did not come over the tailnet. Starting, ending and reconfiguring a session
 is the human's step -- ask them to run `ssh-sandbox up <host> [opts]`. The sandbox
 key cannot do it, by design. Ending a session deletes /workspace: tell the human
 which results to keep before they run `ssh-sandbox down`.
+
+On the laptop, under `agent-jail`, `Read-only file system` for a path in home means
+it is outside the writable set (the directory the jail started in, plus
+`~/.config/agent-jail/rw`): work in the project, or ask the human to list the path.
 
 Lifecycle and the threat model: `ssh-sandbox --help`,
 `agent-sandbox --help` (on the server), and the `sandbox` section of the zfiles README.
