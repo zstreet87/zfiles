@@ -45,7 +45,7 @@ EOF
 
 NAME="${USER:-$(id -un)}_agent" IMAGE="" GPU=auto NETWORK=none IPC=private TTL=12
 SHM=8g MEMORY="" CPUS="" PIDS=8192 TMP_SIZE=8g WORKSPACE="" RW_ROOT=0 SECCOMP=0 FORCE=0
-MOUNTS=() ENVS=()
+MOUNTS=() ENVS=() CREATED=""
 
 size_ok() { [[ $1 =~ ^[0-9]+(\.[0-9]+)?[bkmgBKMG]?$ ]] || die "bad $2: $1"; }
 name_ok() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "bad name: $1"; }
@@ -84,7 +84,7 @@ load_session() {
     [[ -f $SESSION ]] || return 1
     local k v
     while IFS='=' read -r k v; do
-        case $k in name) NAME=$v ;; workspace) WORKSPACE=$v ;; blob) KBLOB=$v ;; esac
+        case $k in name) NAME=$v ;; workspace) WORKSPACE=$v ;; blob) KBLOB=$v ;; created) CREATED=$v ;; esac
     done <"$SESSION"
 }
 
@@ -218,6 +218,8 @@ cmd_up() {
         guard_jobs
     fi
     WORKSPACE=${WORKSPACE:-$HOME/agent-sandbox/$NAME}
+    # down deletes the workspace only if this session made it: never a directory you had.
+    if [[ -e $WORKSPACE ]]; then CREATED=${CREATED:-0}; else CREATED=1; fi
     (umask 077 && mkdir -p "$WORKSPACE")
     ws=$(check_source "$WORKSPACE")
     [[ -n $MEMORY ]] || MEMORY=$(awk '/^MemTotal:/ {print int($2 / 2) "k"}' /proc/meminfo)
@@ -250,7 +252,8 @@ cmd_up() {
     stage_tools
     ARGS+=(--entrypoint sleep "$IMAGE" infinity)
     docker_ "${ARGS[@]}" >/dev/null
-    printf 'name=%s\nworkspace=%s\nblob=%s\n' "$NAME" "$ws" "$KBLOB" >"$SESSION"
+    printf 'name=%s\nworkspace=%s\nblob=%s\ncreated=%s\n' "$NAME" "$ws" "$KBLOB" "$CREATED" >"$SESSION"
+    : >>"$ROOT/audit.log" # exists from the start, so down can always copy it
     # restrict: no agent/port/X11 forwarding, no ~/.ssh/rc; pty back on for shells.
     # expiry-time: the key dies on its own if `down` never runs (laptop lost, session abandoned).
     expiry=$(date -d "+$TTL hours" +%Y%m%d%H%M) # server-local: sshd before 9.x rejects a Z suffix
@@ -268,13 +271,16 @@ cmd_down() {
         docker_ rm -f -v "$NAME" >/dev/null
     fi
     rewrite_keys
-    [[ $WORKSPACE == "$HOME"/?* && $WORKSPACE != *..* ]] || die "workspace $WORKSPACE is outside your home; not deleting it"
-    rm -rf -- "$WORKSPACE"
-    rmdir "$HOME/agent-sandbox" 2>/dev/null || true # only if this was its last workspace
+    if ((CREATED)); then
+        rm -rf -- "$WORKSPACE"
+        rmdir "$HOME/agent-sandbox" 2>/dev/null || true # only if this was its last workspace
+    else
+        echo "agent-sandbox: kept $WORKSPACE: it existed before the session" >&2
+    fi
     rm -rf -- "$ROOT"
     exists && left+=("container $NAME")
     grep -qF -- "$KBLOB" "$HOME/.ssh/authorized_keys" && left+=("key line")
-    [[ -e $WORKSPACE ]] && left+=("$WORKSPACE")
+    ((CREATED)) && [[ -e $WORKSPACE ]] && left+=("$WORKSPACE")
     [[ -e $ROOT ]] && left+=("$ROOT")
     ((${#left[@]} == 0)) || die "left behind: ${left[*]}"
     echo "agent-sandbox: $NAME removed; nothing left (container, key, workspace, $ROOT)"

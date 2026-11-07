@@ -193,7 +193,9 @@ spx status >/dev/null; spx prep >/dev/null 2>&1 && bad "stream-post prep took a 
 # It runs from the session dir ssh-sandbox ships it to, as on a server.
 H=$T/ash; R=$H/.agent-sandbox
 mkdir -p "$R" "$H/.ssh"
-cp "$REPO/common/stow/sandbox/.local/bin/agent-sandbox" "$REPO/common/stow/sandbox/.local/share/agent-sandbox/agent-job" "$R/"
+# ssh-sandbox ships a fresh copy each session; down deletes it.
+ship() { mkdir -p "$R" && cp "$REPO/common/stow/sandbox/.local/bin/agent-sandbox" "$REPO/common/stow/sandbox/.local/share/agent-sandbox/agent-job" "$R/"; }
+ship
 AS=$R/agent-sandbox
 D=$T/docker; mkdir -p "$D/bin"
 # Fake docker: logs argv one per line; inspect answers from $D/{label,running}; rm drops it.
@@ -226,6 +228,7 @@ grep -qx "$R/tools:/opt/agent-sandbox:ro" "$D/last" || bad "agent-sandbox tools 
 grep -q -- '--library-path /opt/agent-sandbox/lib' "$R/tools/bin/rsync" || bad "staged tools not bound by --library-path"
 grep -rq LD_LIBRARY_PATH "$R/tools/bin" && bad "staged tools set LD_LIBRARY_PATH (tmux jobs would inherit it)"
 grep -q "^$(id -un):x:$(id -u):" "$R/tools/passwd" || bad "agent-sandbox passwd lacks our uid"
+[[ -f $R/audit.log ]] || bad "up did not create the audit log (down copies it even if no command ran)"
 blob=$(cut -d' ' -f2 "$T/k.pub")
 grep -q "^restrict,pty,expiry-time=\"[0-9]\{12\}\",command=\"$AS gate u_agent\" ssh-ed25519 $blob" "$AK" || bad "key line not restricted/expiring/forced: $(cat "$AK")"
 grep -q AAAAother "$AK" || bad "agent-sandbox dropped another key"
@@ -269,6 +272,12 @@ grep -q -- "$blob" "$AK" && bad "down left the key line"
 grep -q AAAAother "$AK" || bad "down dropped another key"
 [[ -e $H/agent-sandbox || -e $R ]] && bad "down left files: $(ls -a "$H")"
 as down >/dev/null 2>&1 && bad "down succeeded with no session"
+# A workspace the session made is deleted wherever it is; one that already existed never is.
+mkdir -p "$T/scratch/had"; echo keep > "$T/scratch/had/f"
+ship; o=$(up --workspace "$T/scratch/had" 2>&1 && as down 2>&1) || bad "session on an existing workspace failed: $o"
+eq "down kept a workspace that existed before the session" "$(cat "$T/scratch/had/f" 2>/dev/null)" keep
+ship; up --workspace "$T/scratch/new" >/dev/null 2>&1 && as down >/dev/null 2>&1 || bad "session on a new outside-home workspace failed"
+[[ -e $T/scratch/new ]] && bad "down left a workspace the session created outside home"
 
 # --- agent-job (real tmux, private socket dir) --------------------------------
 if command -v tmux >/dev/null; then
@@ -324,14 +333,14 @@ SS=$REPO/common/stow/sandbox/.local/bin/ssh-sandbox
 mkdir -p "$T/sshbin"
 cat > "$T/sshbin/ssh" <<'EOF'
 #!/bin/sh
-[ "$1" = -G ] || exit 1
+[ "$1" = -G ] || { printf '%s\n' "$@" > "$T_SSHLOG"; exit 0; }
 case $2 in
   *-agent) awk -v a="$2" '$0=="Host "a{on=1;next} /^Host /{on=0} on&&NF{print tolower($1), $2}' "$CONF"; cat "$EXTRA" ;;
   *) printf 'hostname %s.example\nuser me\nport 22\n' "$2" ;;
 esac
 EOF
 chmod +x "$T/sshbin/ssh"; : > "$T/extra"
-ss() { env -i HOME="$T/ssh" PATH="$T/sshbin:/usr/bin:/bin" CONF="$T/ssh/c.conf" EXTRA="$T/extra" \
+ss() { env -i HOME="$T/ssh" PATH="$T/sshbin:/usr/bin:/bin" CONF="$T/ssh/c.conf" EXTRA="$T/extra" T_SSHLOG="$T/sshlog" \
     AGENT_SANDBOX_SSH_CONF="$T/ssh/c.conf" AGENT_SANDBOX_KEY="$T/ssh/k" "$SS" "$@"; }
 ss config node1 >/dev/null 2>&1 && ss config node1 >/dev/null 2>&1 && ss config node2 >/dev/null 2>&1 || bad "ssh-sandbox config failed"
 eq "ssh-sandbox config idempotent" "$(ss list | tr '\n' ' ')" "node1-agent node2-agent "
@@ -346,9 +355,14 @@ echo "proxycommand nc %h %p" > "$T/extra"
 ss check node1-agent >/dev/null 2>&1 && bad "ssh-sandbox check passed a ProxyCommand"
 ss config 'x;rm' >/dev/null 2>&1 && bad "ssh-sandbox accepted a hostile host name"
 ss config -oProxyCommand >/dev/null 2>&1 && bad "ssh-sandbox accepted a host name that is an ssh option"
+ss config me@node3 >/dev/null 2>&1; grep -qx 'Host node3-agent' "$T/ssh/c.conf" || bad "user@host did not give the alias host-agent"
+# Server-side commands go through sh -c whatever the login shell, args quoted for sh.
+ss status node1 >/dev/null 2>&1
+eq "server commands run via sh -c" "$(tail -1 "$T/sshlog")" "sh -c '~/.agent-sandbox/agent-sandbox status '"
 ss down node1 >/dev/null 2>&1 && bad "ssh-sandbox down ran without --fetch or --discard (it deletes the workspace)"
 mkdir -p "$T/ssh/.config/agent-sandbox"; echo "--image x" > "$T/ssh/.config/agent-sandbox/node1"; chmod 666 "$T/ssh/.config/agent-sandbox/node1"
 o=$(ss up node1 2>&1); grep -q "not group/world writable" <<<"$o" || bad "ssh-sandbox read world-writable host defaults: $o"
+o=$(ss up me@node1 2>&1); grep -q "not group/world writable" <<<"$o" || bad "user@host did not find the host's defaults: $o"
 
 # --- target contract (bootstrap --plan: resolve, print, touch nothing) --------
 plan() { env -i HOME="$T/planhome" PATH=/usr/bin:/bin "$@" "$REPO/bootstrap.sh" --plan 2>&1; }

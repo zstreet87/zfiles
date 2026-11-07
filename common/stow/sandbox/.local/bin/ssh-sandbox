@@ -23,7 +23,7 @@ usage() {
 usage: ssh-sandbox <command> ...
   up HOST [opts]            start a session: ship agent-sandbox, fresh container, authorize
                             the key until --ttl. opts: agent-sandbox --help; defaults, one
-                            or more per line, from $HOSTS/HOST
+                            or more per line, from $HOSTS/HOST (HOST without user@)
   down HOST --fetch DIR     copy /workspace to DIR, then remove everything the session put
   down HOST --discard       on HOST and verify it. --force also ends running jobs. The
                             session's audit log is always saved to $AUDIT/.
@@ -49,7 +49,7 @@ cmd_keygen() {
 
 # Replace ALIAS's block in CONF with one built from HOST's resolved settings.
 cmd_config() {
-    local host=$1 alias=${2:-$1-agent} g hn user port pj tmp
+    local host=$1 alias=${2:-${1##*@}-agent} g hn user port pj tmp
     name_ok "$host"; name_ok "$alias"
     g=$(ssh -G "$host") || die "ssh -G $host failed"
     hn=$(awk '$1=="hostname"{print $2; exit}' <<<"$g")
@@ -111,7 +111,7 @@ cmd_check() {
 
 # Per-host defaults live here, on the laptop, so the server keeps nothing between sessions.
 host_defaults() {
-    local f=$HOSTS/$1 line w
+    local f=$HOSTS/${1##*@} line w
     [[ -f $f ]] || return 0
     [[ -O $f && -z $(find "$f" -perm /022) ]] || die "$f must be owned by you and not group/world writable"
     while IFS= read -r line; do
@@ -120,21 +120,24 @@ host_defaults() {
     done <"$f"
 }
 
-remote() { local host=$1; shift; "${MSSH[@]}" "$host" "$REMOTE $(printf '%q ' "$@")"; }
+# Every command on the server goes through sh -c: the login shell there may be csh or fish.
+sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+on() { local host=$1; shift; "${MSSH[@]}" "$host" "sh -c $(sq "$*")"; }
+remote() { local host=$1; shift; on "$host" "$REMOTE $(printf '%q ' "$@")"; }
 
 cmd_up() {
-    local host=$1 alias=$1-agent out DEFAULTS=(); shift
+    local host=$1 alias=${1##*@}-agent out DEFAULTS=(); shift
     name_ok "$host"
     host_defaults "$host"
     cmd_keygen
     ssh -G "$alias" 2>/dev/null | grep -qx "identityfile ${KEY/#$HOME/\~}\|identityfile $KEY" || cmd_config "$host" "$alias"
     cmd_check "$alias"
     # Ship this session's copy; down deletes it.
-    "${MSSH[@]}" "$host" 'umask 077 && mkdir -p ~/.agent-sandbox && cat > ~/.agent-sandbox/agent-sandbox && chmod 700 ~/.agent-sandbox/agent-sandbox' <"$HERE/agent-sandbox"
-    "${MSSH[@]}" "$host" 'umask 077 && cat > ~/.agent-sandbox/agent-job && chmod 755 ~/.agent-sandbox/agent-job' <"$HERE/../share/agent-sandbox/agent-job"
+    on "$host" 'umask 077 && mkdir -p ~/.agent-sandbox && cat > ~/.agent-sandbox/agent-sandbox && chmod 700 ~/.agent-sandbox/agent-sandbox' <"$HERE/agent-sandbox"
+    on "$host" 'umask 077 && cat > ~/.agent-sandbox/agent-job && chmod 755 ~/.agent-sandbox/agent-job' <"$HERE/../share/agent-sandbox/agent-job"
     if ! remote "$host" up "${DEFAULTS[@]}" "$@" <"$KEY.pub"; then
         # A failed first up leaves no session to tear down: remove what we shipped.
-        "${MSSH[@]}" "$host" 'test -f ~/.agent-sandbox/session || rm -rf ~/.agent-sandbox'
+        on "$host" 'test -f ~/.agent-sandbox/session || rm -rf ~/.agent-sandbox'
         die "up failed on $host"
     fi
     # stdout only: servers print login banners on stderr.
@@ -158,17 +161,17 @@ cmd_down() {
     if [[ -n $fetch ]]; then
         mkdir -p "$fetch"
         # The agent wrote these files: --safe-links drops symlinks that point outside DIR.
-        rsync -a --safe-links "$host-agent:/workspace/" "$fetch/" || die "fetch failed; nothing removed"
+        rsync -a --safe-links "${host##*@}-agent:/workspace/" "$fetch/" || die "fetch failed; nothing removed"
         echo "ssh-sandbox: workspace copied to $fetch"
     fi
     # The session's audit log lives in what down deletes: bring it home first.
     (umask 077 && mkdir -p "$AUDIT")
-    log=$AUDIT/$host-$(date -u +%Y%m%dT%H%M%SZ).log
-    "${MSSH[@]}" "$host" 'cat ~/.agent-sandbox/audit.log 2>/dev/null' >"$log" || die "could not copy the audit log; nothing removed"
+    log=$AUDIT/${host##*@}-$(date -u +%Y%m%dT%H%M%SZ).log
+    on "$host" 'cat ~/.agent-sandbox/audit.log' >"$log" || die "could not copy the audit log; nothing removed"
     echo "ssh-sandbox: audit log ($(wc -l <"$log") commands) saved to $log"
     remote "$host" down "${force[@]}"
-    out=$(ssh -o BatchMode=yes "$host-agent" agent-sandbox-probe 2>&1) && die "the sandbox key still logs in to $host: $out"
-    echo "ssh-sandbox: $host-agent no longer logs in"
+    out=$(ssh -o BatchMode=yes "${host##*@}-agent" agent-sandbox-probe 2>&1) && die "the sandbox key still logs in to $host: $out"
+    echo "ssh-sandbox: ${host##*@}-agent no longer logs in"
 }
 
 sub=${1:-}; (($#)) && shift
