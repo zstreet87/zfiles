@@ -38,32 +38,18 @@ backstop, not permission.
 
 ## Writing code
 
-Before writing or reviewing non-trivial Python, C, C++, Rust or
+Before writing or reviewing non-trivial Python, C, C++, Rust, shell or
 performance-critical code, load the `code-style` skill and read only the
 reference file for that language. The repository's own conventions take
 precedence over the skill.
 
-## Writing shell scripts
+Shell rules that apply even without the skill. Every script must pass
+`shellcheck` (if it is not installed, run
+`uvx --from shellcheck-py shellcheck`). In addition:
 
-Every script must pass `shellcheck` (run it via
-`uvx --from shellcheck-py shellcheck` if it is not installed).
-
-- **Strict mode**: start a script with `#!/usr/bin/env bash` and
-  `set -euo pipefail`. Handle expected failures explicitly with `|| rc=$?`
-  rather than turning strict mode off.
-- **Changing directory**: avoid it. Use `git -C dir`, `make -C dir`, or
-  absolute paths instead. If a command must run elsewhere, put it in a
-  subshell, `( cd "$dir" || exit; cmd )`. Check every `cd` with `|| exit` or
-  `|| return`. Do not use `pushd`/`popd` in scripts: they are meant for
-  interactive use, an interrupted script leaves you in the wrong directory,
-  and `popd` returns to a directory by name.
-- **Quoting**: quote every expansion (`"$var"`, `"$(cmd)"`, `"${arr[@]}"`).
-  Use arrays for argument lists, never word-split strings.
-- **Tests**: in bash, use `[[ ]]` for tests and `(( ))` for arithmetic.
-- **Variables**: declare variables in functions with `local`, and declare and
-  assign them on separate lines when the value comes from a command, so its
-  exit status is not lost.
-- **Errors**: send errors to stderr (`>&2`). Exit non-zero on failure, and
-  clean up temporary files with `trap 'rm -rf "$tmp"' EXIT`.
-- **Scope**: if a script grows past about 100 lines or needs data structures,
-  write it in Python instead.
+- **Errors:** check failures explicitly. Do not rely on `set -e`; its rules
+  are unreliable and change between bash versions.
+- **`cd`:** follow every `cd` with `|| exit` or `|| return`, or put it in a
+  `( … )` subshell. Never use `pushd` or `popd`.
+- **Quoting:** quote every expansion, pass argument lists as arrays, and
+  never use `eval`.
