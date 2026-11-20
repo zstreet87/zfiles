@@ -36,6 +36,13 @@ tenant identifiers stay out of the repo entirely: `$HOME/.local/bin` and
 `${XDG_CONFIG_HOME:-$HOME/.config}/zfiles/leak-patterns`, but treat it as a
 backstop, not permission.
 
+## Writing code
+
+Before writing or reviewing non-trivial Python, C, C++, Rust or
+performance-critical code, load the `code-style` skill and read only the
+reference file for that language. The repository's own conventions take
+precedence over the skill.
+
 ## Writing shell scripts
 
 Every script must pass `shellcheck` (run it via
