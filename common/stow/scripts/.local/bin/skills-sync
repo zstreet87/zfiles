@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# skills-sync — pull every third-party skill repo and link its skills into ~/.agents/skills.
+#
+#   skills-sync           # fast-forward each repo, link new skills, drop dead links, run agent-skills
+#
+# Skills are symlinks into the checkouts, so a pull updates content in place; pi
+# picks changes up on its next session or /reload. Local edits in a checkout are
+# never touched: a repo that cannot fast-forward is left as is with a warning.
+set -uo pipefail
+
+ROOT="$HOME/.agents/skills"
+CACHE="${XDG_DATA_HOME:-$HOME/.local/share}/agent-skill-repos"
+REPOS=(  # "<url> <subdir holding skill dirs> [checkout dir, default $CACHE/<owner>-<name>]"
+    "https://github.com/mattpocock/skills skills $HOME/skills"
+    "https://github.com/vshvedov/elephant-goldfish codex/skills"  # eg-* are portable SKILL.md skills
+    "https://github.com/google/elephant-goldfish-model skills $HOME/elephant-goldfish-model"
+)
+[[ ${1:-} == -h || ${1:-} == --help ]] && { sed -n '2,7p' "$0" | sed 's/^# \?//'; exit 0; }
+
+mkdir -p "$ROOT"
+managed=()
+for entry in "${REPOS[@]}"; do
+    read -r url sub dir <<<"$entry"
+    dir=${dir:-$CACHE/$(basename "$(dirname "$url")")-$(basename "$url")}
+    managed+=("$dir")
+    if [[ -d $dir/.git ]]; then
+        before=$(git -C "$dir" rev-parse HEAD)
+        git -C "$dir" pull -q --ff-only || echo "skills-sync: $dir: pull failed, keeping current checkout" >&2
+        [[ $before != $(git -C "$dir" rev-parse HEAD) ]] && echo "updated $dir: $(git -C "$dir" log --oneline "$before..HEAD" | wc -l) commit(s)"
+    else
+        git clone -q "$url" "$dir" || { echo "skills-sync: clone $url failed" >&2; continue; }
+        echo "cloned $url -> $dir"
+    fi
+    while IFS= read -r md; do
+        src=$(dirname "$md"); link="$ROOT/$(basename "$src")"
+        if [[ -e $link && ! -L $link ]]; then  # hand-copied install: keep it, out of the way
+            bak="$ROOT.bak-$(date +%F)"; mkdir -p "$bak"; mv "$link" "$bak/" && echo "moved old copy of $(basename "$src") to $bak"
+        elif [[ -L $link && -e $link ]]; then
+            target=$(readlink "$link"); ours=false
+            for d in "${managed[@]}" "$CACHE"; do [[ $target == "$d"/* ]] && ours=true; done
+            $ours || { echo "skills-sync: $link links elsewhere ($target), leaving it" >&2; continue; }
+        fi
+        [[ $(readlink "$link" 2>/dev/null) == "$src" ]] || { ln -sfn "$src" "$link"; echo "linked $(basename "$src")"; }
+    done < <(find "$dir/$sub" -name SKILL.md -not -path '*/.git/*')
+done
+
+# skills removed or moved upstream leave dangling links behind
+find "$ROOT" -maxdepth 1 -xtype l -print -delete | sed 's/^/removed dead link /'
+
+command -v agent-skills &>/dev/null && agent-skills >/dev/null

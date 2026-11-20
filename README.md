@@ -124,6 +124,10 @@ root pi reads natively; `agent-skills` symlinks the same tree into
 skill lives with the program it describes rather than in one central pile, so
 removing a package removes its guidance with it.
 
+Third-party skill repos (`~/skills`, elephant-goldfish, ...) are listed in
+`skills-sync`; run it to fast-forward them, link new skills, and drop links to
+removed ones. Edits in a checkout show up in pi on the next session or `/reload`.
+
 Remote stows `shell`, `bash`, `yazi`, `measure`, and the skill packages
 (`remote/stow.txt`) — no zsh, no herdr, no pi, no desktop
 anything. The skills go along because they are inert markdown, and an agent on

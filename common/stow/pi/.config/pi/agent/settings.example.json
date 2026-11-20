@@ -8,8 +8,10 @@
     "sets `omarchy-system` instead, which the theme-set hook keeps in sync",
     "with the active Omarchy theme and pi hot-reloads.",
     "Providers and credentials belong in models.json, which is also untracked.",
-    "feynman is installed but loads nothing here; vaults enable it via .pi/settings.json (vault-template)."
+    "feynman is installed but loads nothing here; vaults enable it via .pi/settings.json (vault-template).",
+    "defaultTools entries are merged into settings.json by setup.sh (codemode: scripts filter tool output before it reaches context)."
   ],
+  "defaultTools": ["+codemode"],
   "packages": [
     "npm:pi-web-access",
     "npm:pi-lens",

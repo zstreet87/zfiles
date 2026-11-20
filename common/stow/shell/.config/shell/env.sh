@@ -31,6 +31,8 @@ export GOMODCACHE="$XDG_CACHE_HOME/go/mod"
 export NPM_CONFIG_USERCONFIG="$XDG_CONFIG_HOME/npm/npmrc"
 export NPM_CONFIG_CACHE="$XDG_CACHE_HOME/npm"
 export PI_CODING_AGENT_DIR="$XDG_CONFIG_HOME/pi/agent"
+# managed pi launcher (pi install writes this into .zshrc with an absolute path)
+[ -d "$PI_CODING_AGENT_DIR/bin" ] && export PATH="$PI_CODING_AGENT_DIR/bin:$PATH"
 export DOCKER_CONFIG="$XDG_CONFIG_HOME/docker"
 export PASSWORD_STORE_DIR="$XDG_DATA_HOME/password-store"
 export XCOMPOSEFILE="$XDG_CONFIG_HOME/X11/XCompose"
