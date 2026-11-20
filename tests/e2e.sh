@@ -8,7 +8,7 @@
 # installed twice: the second run is the update path and must change nothing.
 # Omarchy and WSL cannot run in a container -- test those on the real machine.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 
 TOOLS="nvim yazi ya rg fd fzf zoxide bat eza jq stow paperctl measure elan lean-sandbox"
 

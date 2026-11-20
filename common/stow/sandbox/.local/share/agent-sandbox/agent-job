@@ -64,7 +64,7 @@ cmd_start() {
 # The job itself, inside tmux: output to the pane and to the log; the exit code to a file.
 cmd_run() {
     d=$1
-    cd "$(cat "$d/cwd")"
+    cd "$(cat "$d/cwd")" || { echo "agent-job: cannot enter $(cat "$d/cwd")" | tee -a "$d/log"; echo 1 >"$d/exit"; exit 1; }
     sh_="sh"; command -v bash >/dev/null 2>&1 && sh_=bash
     # rc by hand: under set -e a failing job would end this group before its code is saved.
     { rc=0; "$sh_" -lc "$(cat "$d/cmd")" </dev/null || rc=$?; echo "$rc" >"$d/exit.tmp"; } 2>&1 | tee -a "$d/log"

@@ -8,7 +8,7 @@ set -uo pipefail
 # A hook exports GIT_DIR (always, from a worktree): every fixture repo below would
 # then commit into this one. Seen: a push from a worktree flipped core.bare.
 unset $(git rev-parse --local-env-vars)
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 REPO=$PWD
 
 T=$(mktemp -d)
