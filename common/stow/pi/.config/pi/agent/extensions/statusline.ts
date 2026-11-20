@@ -16,9 +16,10 @@
  *
  *   This footer keeps that shape:
  *
- *     [claude-sonnet-4 zfiles]              (pi)-[ctx:87%] (git)-[br:main]
+ *     [claude-sonnet-4:high zfiles]  (pi)-[ctx:87%] (git)-[br:main] (usd)-[$0.42]
  *
- *   ctx is the percentage of the context window REMAINING.
+ *   ctx is the percentage of the context window REMAINING. `:high` is the
+ *   thinking level (omitted when off); usd is this branch's session cost.
  *
  * To restyle, edit THEME. To change what appears and in what order, edit
  * LAYOUT. Everything below those two is mechanism.
@@ -95,6 +96,8 @@ const THEME = {
 	dash: role("ZF_PROMPT_JOIN"), // the - joining ( ) to [ ]
 	label: PLAIN, // the group name: pi, git
 	branch: role("ZF_PROMPT_VALUE"),
+	thinking: role("ZF_PROMPT_ENV"), // like the venv tag in the prompt
+	cost: role("ZF_PROMPT_VALUE"),
 	ctx: {
 		ok: role("ZF_PROMPT_CTX_OK"),
 		warn: role("ZF_PROMPT_CTX_WARN"),
@@ -128,13 +131,15 @@ const TEXT_STEPS = [Number.POSITIVE_INFINITY, 24, 16, 10];
 
 const LAYOUT = {
 	left: ["model", "dir"],
-	right: ["ctx", "git"],
+	right: ["ctx", "git", "cost"],
 } satisfies { left: SegmentName[]; right: GroupName[] };
 
 // ─── Segment + group definitions ─────────────────────────────────────────────
 
 interface State {
 	model: string;
+	thinking: string;
+	cost: number;
 	provider: string;
 	cwd: string;
 	percent: number | null;
@@ -150,7 +155,9 @@ type Segment = (s: State) => string | undefined;
 type Group = (s: State, b: Budget) => { label: string; body: string } | undefined;
 
 const SEGMENTS = {
-	model: (s) => THEME.model(elide(s.model, MODEL_MAX)),
+	model: (s) =>
+		THEME.model(elide(s.model, MODEL_MAX)) +
+		(s.thinking === "off" ? "" : THEME.dash(":") + THEME.thinking(s.thinking)),
 	provider: (s) => THEME.provider(s.provider),
 	dir: (s) => THEME.dir(shortDir(s.cwd)),
 } satisfies Record<string, Segment>;
@@ -161,6 +168,7 @@ const GROUPS = {
 		s.branch
 			? { label: "git", body: THEME.branch(`br:${elide(s.branch, b.textMax)}`) }
 			: undefined,
+	cost: (s) => (s.cost > 0 ? { label: "usd", body: THEME.cost(`$${s.cost.toFixed(2)}`) } : undefined),
 } satisfies Record<string, Group>;
 
 type SegmentName = keyof typeof SEGMENTS;
@@ -264,8 +272,14 @@ export default function (pi: ExtensionAPI) {
 				render(width: number): string[] {
 					if (width <= 0) return [""];
 					const usage = ctx.getContextUsage();
+					let cost = 0;
+					for (const e of ctx.sessionManager.getBranch()) {
+						if (e.type === "message" && e.message.role === "assistant") cost += e.message.usage?.cost?.total ?? 0;
+					}
 					const state: State = {
 						model: ctx.model?.id ?? "no-model",
+						thinking: pi.getThinkingLevel(),
+						cost,
 						provider: ctx.model?.provider ?? "no-provider",
 						cwd: ctx.cwd ?? process.cwd(),
 						percent: usage?.percent ?? null,

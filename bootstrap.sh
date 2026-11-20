@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$REPO_DIR"
+cd "$REPO_DIR" || exit
 
 info() { echo -e "\033[1;34m>>>\033[0m $1"; }
 warn() { echo -e "\033[1;33m!!!\033[0m $1"; }

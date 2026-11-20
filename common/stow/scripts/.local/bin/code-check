@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""code-check -- lint changed files and print only the findings, one line each.
+
+Built for agents: run it (ideally from a codemode script) after editing, and
+only rule violations reach the context, each tagged with the linter's rule ID
+(ruff B006, SC2086, cert-int32-c, clippy::...). These enforce the mechanical
+half of the code-style skill, so the model need not load those rules.
+
+  code-check                 # files changed vs HEAD, plus untracked ones
+  code-check FILE...         # just these files
+  code-check --max N         # print at most N findings (default 40)
+
+A repository's own linter configuration wins; the guideline rule sets below
+apply only where a repo has none. Missing linters run through `uvx` when
+available, otherwise their files are reported as skipped. Exit status: 0 clean,
+1 findings, 2 usage error.
+"""
+
+import argparse
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+# Guideline rule sets (code-style skill) used when the repo configures nothing.
+RUFF_SELECT = "E4,E7,E9,F,B,BLE,E722,PLW,RET,SIM,UP,PIE,PTH,TRY"
+TIDY_CHECKS = "-*,bugprone-*,cert-*,cppcoreguidelines-*,performance-*,-cppcoreguidelines-avoid-magic-numbers"
+SH_EXT = {".sh", ".bash"}
+PY_EXT = {".py"}
+C_EXT = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp"}
+
+
+def run(cmd: list[str], cwd: Path) -> str:
+    """Run a linter and return its combined output; linters exit non-zero on findings."""
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False).stdout
+
+
+def tool(name: str, pypi: str | None = None) -> list[str] | None:
+    """Return the command prefix for a linter: on PATH, else through uvx, else None."""
+    if shutil.which(name):
+        return [name]
+    if pypi and shutil.which("uvx"):
+        return ["uvx", "-q", "--from", pypi, name]
+    return None
+
+
+def changed(root: Path) -> list[Path]:
+    """Return files changed against HEAD plus untracked files, relative to the repo root."""
+    out = run(["git", "diff", "--name-only", "--diff-filter=d", "HEAD"], root)
+    out += run(["git", "ls-files", "--others", "--exclude-standard"], root)
+    return [Path(p) for p in dict.fromkeys(out.split()) if (root / p).is_file()]
+
+
+def is_shell(path: Path) -> bool:
+    """Return whether path is a shell script by extension or shebang."""
+    if path.suffix in SH_EXT:
+        return True
+    try:
+        first = path.open("rb").readline()
+    except OSError:
+        return False
+    return bool(re.match(rb"#!.*\b(ba)?sh\b", first))
+
+
+def has_ruff_config(root: Path) -> bool:
+    """Return whether the repo configures ruff itself."""
+    if (root / "ruff.toml").exists() or (root / ".ruff.toml").exists():
+        return True
+    py = root / "pyproject.toml"
+    return py.exists() and "[tool.ruff" in py.read_text(encoding="utf-8")
+
+
+def lint_python(root: Path, files: list[Path]) -> list[str]:
+    """Return ruff findings as `file:line: [CODE] message`."""
+    cmd = tool("ruff", "ruff")
+    if not cmd:
+        return [f"skipped (no ruff): {len(files)} python files"]
+    extra = [] if has_ruff_config(root) else ["--select", RUFF_SELECT]
+    out = run([*cmd, "check", "--output-format=concise", "--no-fix", *extra, *map(str, files)], root)
+    rows = []
+    for line in out.splitlines():
+        m = re.match(r"(.+?):(\d+):\d+: (\S+) (.*)", line)
+        if m:
+            rows.append(f"{m[1]}:{m[2]}: [ruff {m[3]}] {m[4]}")
+    return rows
+
+
+def lint_shell(root: Path, files: list[Path]) -> list[str]:
+    """Return shellcheck findings as `file:line: [SCnnnn] message`."""
+    cmd = tool("shellcheck", "shellcheck-py")
+    if not cmd:
+        return [f"skipped (no shellcheck): {len(files)} shell files"]
+    out = run([*cmd, "-f", "gcc", "-S", "info", *map(str, files)], root)
+    rows = []
+    for line in out.splitlines():
+        m = re.match(r"(.+?):(\d+):\d+: \w+: (.*) \[(SC\d+)\]", line)
+        if m:
+            rows.append(f"{m[1]}:{m[2]}: [{m[4]}] {m[3]}")
+    return rows
+
+
+def lint_c(root: Path, files: list[Path]) -> list[str]:
+    """Return clang-tidy findings; needs compile_commands.json to know the flags."""
+    db = next((d for d in (root, root / "build") if (d / "compile_commands.json").exists()), None)
+    cmd = tool("clang-tidy", "clang-tidy")
+    if not (db and cmd):
+        why = "no compile_commands.json" if not db else "no clang-tidy"
+        return [f"skipped ({why}): {len(files)} C/C++ files"]
+    checks = [] if (root / ".clang-tidy").exists() else [f"--checks={TIDY_CHECKS}"]
+    out = run([*cmd, "-p", str(db), "--quiet", *checks, *map(str, files)], root)
+    rows = []
+    for line in out.splitlines():
+        m = re.match(r"(.+?):(\d+):\d+: (?:warning|error): (.*) \[([\w.,-]+)\]", line)
+        if m:
+            rows.append(f"{Path(m[1]).resolve().relative_to(root.resolve())}:{m[2]}: [{m[4]}] {m[3]}")
+    return rows
+
+
+def lint_rust(root: Path, files: list[Path]) -> list[str]:
+    """Return clippy findings for crates that contain changed .rs files."""
+    if not shutil.which("cargo"):
+        return [f"skipped (no cargo): {len(files)} rust files"]
+    crates = {next((p for p in (root / f).resolve().parents if (p / "Cargo.toml").exists()), None) for f in files}
+    wanted = {(root / f).resolve() for f in files}
+    rows = []
+    for crate in filter(None, crates):
+        out = subprocess.run(
+            ["cargo", "clippy", "--quiet", "--message-format=short", "--", "-W", "clippy::pedantic"],
+            cwd=crate, capture_output=True, text=True, check=False).stderr
+        for line in out.splitlines():
+            m = re.match(r"(.+?):(\d+):\d+: (?:warning|error): (.*)", line)
+            if m and (crate / m[1]).resolve() in wanted:
+                rows.append(f"{(crate / m[1]).resolve().relative_to(root.resolve())}:{m[2]}: [clippy] {m[3]}")
+    return rows
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("files", nargs="*", type=Path)
+    ap.add_argument("--max", type=int, default=40)
+    args = ap.parse_args()
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False)
+    root = Path(top.stdout.strip() or ".").resolve()
+    files = [f.resolve().relative_to(root) if f.is_absolute() else (Path.cwd() / f).resolve().relative_to(root)
+             for f in args.files] if args.files else changed(root)
+    files = [f for f in files if (root / f).is_file()]
+
+    groups = {
+        lint_python: [f for f in files if f.suffix in PY_EXT],
+        lint_shell: [f for f in files if f.suffix not in PY_EXT | C_EXT and is_shell(root / f)],
+        lint_c: [f for f in files if f.suffix in C_EXT],
+        lint_rust: [f for f in files if f.suffix == ".rs"],
+    }
+    rows = [r for fn, fs in groups.items() if fs for r in fn(root, fs)]
+    findings = [r for r in rows if not r.startswith("skipped")]
+    for r in [r for r in rows if r.startswith("skipped")] + findings[: args.max]:
+        print(r)
+    if len(findings) > args.max:
+        print(f"... {len(findings) - args.max} more (rerun with --max)")
+    checked = sum(map(len, groups.values()))
+    print(f"code-check: {len(findings)} findings in {checked} files" if checked else "code-check: no lintable changes")
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

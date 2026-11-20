@@ -124,6 +124,19 @@ root pi reads natively; `agent-skills` symlinks the same tree into
 skill lives with the program it describes rather than in one central pile, so
 removing a package removes its guidance with it.
 
+Third-party skill repos (`~/skills`, elephant-goldfish, ...) are listed in
+`skills-sync`; run it to fast-forward them, link new skills, and drop links to
+removed ones. Edits in a checkout show up in pi on the next session or `/reload`.
+
+Pi lists every skill in every request, so rarely used ones are hidden: each
+entry in `common/stow/pi/.config/pi/agent/skill-catalog.json` is excluded in
+pi's settings by `pi-skill-catalog` (run by `skills-sync`) and listed under a
+trigger phrase in one generated `skill-catalog` skill, which the model reads on
+demand. Optional tools (web, Obsidian, papers, lens) are likewise callable only
+from codemode scripts (`extensions/loadout.ts`), so the declared tool set never
+changes mid-session and never invalidates the prompt cache. `code-check` lints
+changed files and prints only findings with rule IDs.
+
 Remote stows `shell`, `bash`, `yazi`, `measure`, and the skill packages
 (`remote/stow.txt`) — no zsh, no herdr, no pi, no desktop
 anything. The skills go along because they are inert markdown, and an agent on
