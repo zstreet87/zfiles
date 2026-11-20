@@ -14,7 +14,7 @@ function run_yazi() {
 	local tmp="$(mktemp -t "yazi-cwd.XXXXX")"
 	yazi "$@" --cwd-file="$tmp"
 	if cwd="$(cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
-		cd -- "$cwd"
+		cd -- "$cwd" || return
 	fi
 	rm -f -- "$tmp"
 }
