@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # skills-sync — pull every third-party skill repo and link its skills into ~/.agents/skills.
 #
-#   skills-sync           # fast-forward each repo, link new skills, drop dead links, run agent-skills
+#   skills-sync           # fast-forward each repo, link new skills, drop dead links, refresh harness links
 #
 # Skills are symlinks into the checkouts, so a pull updates content in place; pi
 # picks changes up on its next session or /reload. Local edits in a checkout are
@@ -48,3 +48,5 @@ done
 find "$ROOT" -maxdepth 1 -xtype l -print -delete | sed 's/^/removed dead link /'
 
 command -v agent-skills &>/dev/null && agent-skills >/dev/null
+# pi hides the skills its settings exclude; keep the catalog that still reaches them current
+command -v pi-skill-catalog &>/dev/null && pi-skill-catalog >/dev/null

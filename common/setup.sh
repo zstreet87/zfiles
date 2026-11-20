@@ -207,8 +207,11 @@ if command -v pi &>/dev/null; then
     info "pi is already installed ($(pi --version 2>/dev/null || echo unknown))."
 else
     info "Installing pi via pi.dev installer..."
-    curl -fsSL https://pi.dev/install.sh | sh && info "pi installed." \
-        || warn "pi installer failed (it needs Node.js >= 22) -- continuing without pi."
+    if curl -fsSL https://pi.dev/install.sh | sh; then
+        info "pi installed."
+    else
+        warn "pi installer failed (it needs Node.js >= 22) -- continuing without pi."
+    fi
 fi
 
 # Migrate pi data from legacy ~/.pi to XDG (~/.config/pi)
@@ -257,7 +260,7 @@ if command -v pi &>/dev/null && [[ -f "$PI_TEMPLATE" ]]; then
         '($t[0].packages | map(select(type == "object")) | INDEX(.source)) as $o
          | .packages |= map(if type == "string" and $o[.] then $o[.] else . end)'
 
-    # append template defaultTools entries (e.g. +codemode) that settings.json lacks, keeping local ones
+    # append template defaultTools entries that settings.json lacks, keeping local ones
     pi_settings_set --slurpfile t "$PI_TEMPLATE" \
         '.defaultTools = reduce ($t[0].defaultTools // [])[] as $x (.defaultTools // []; if index([$x]) then . else . + [$x] end)'
 

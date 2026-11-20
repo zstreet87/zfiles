@@ -1,186 +1,64 @@
 /**
- * loadout — start each session with only the core tools; load groups on demand.
+ * loadout — keep optional tool groups callable from codemode but out of the
+ * model's declared tool list, with a tool set that never changes mid-session.
  *
- *   Header:  tools  core  ·  off: web research obsidian lens subagents   /load <group>
- *   ctrl+space or /load  -> which-key style menu: press a group's key to toggle it
- *   /load <group>     /unload <group>     (the model can call load_tools itself)
+ * Why not load groups on demand: on providers without mid-conversation tool
+ * support (our Anthropic proxy rejects `tool_addition`), any change to the
+ * declared tools makes the next request miss the prompt cache, re-sending the
+ * whole conversation. So every optional tool is activated once at session
+ * start, then hidden through `prepareLoadout`: hidden tools stay callable from
+ * `codemode` scripts (`searchTools()`, `tools.<name>()`) and cost no tokens
+ * until a script calls them. Subagent tools are model-only (not callable from
+ * scripts), so pi-subagents keeps declaring them itself.
  *
- * This trims what the model sees (the tool list in its prompt), not startup
- * time: Pi loads extension code once at launch. For that, scope packages per
- * project instead (see vault-template/.pi/settings.json for feynman).
- *
- * Any tool not matched by GROUPS is core and always on. Groups with no
- * registered tools (e.g. research outside a vault) are hidden.
+ * Only while `codemode` is declared: without it hidden tools would be
+ * unreachable, so sessions without it (e.g. subagent children given an
+ * explicit tool list) are left exactly as configured.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-/** Group -> tool-name prefixes. Edit here to regroup. */
-const GROUPS = {
-	web: ["web_search", "fetch_content", "get_search_content", "source_check"],
-	research: ["alpha_", "feynman_", "hf_"],
-	obsidian: ["obsidian_"],
-	lens: [
-		"lens_diagnostics", "symbol_search", "effective_config", "project_report",
-		"module_report", "read_symbol", "read_enclosing", "pi_lens_activate_tools",
-	],
-	subagents: ["subagent", "bg_wait", "contact_supervisor"],
-	ask: ["ask_user_question"],
-} satisfies Record<string, string[]>;
-const NAMES = Object.keys(GROUPS) as (keyof typeof GROUPS)[];
+/** Tool-name prefixes reachable only through codemode. Anything else is left as its extension set it. */
+const HIDDEN = [
+	// web: pi-web-access
+	"web_search", "fetch_content", "get_search_content", "source_check",
+	// research (vaults only): feynman
+	"alpha_", "feynman_", "hf_",
+	// obsidian: pi-obsidian
+	"obsidian_",
+	// lens: pi-lens code navigation and diagnostics
+	"lens_diagnostics", "symbol_search", "effective_config", "project_report",
+	"module_report", "read_symbol", "read_enclosing", "pi_lens_activate_tools",
+];
+const CARRIER = "zf_loadout";
 
-/** Menu key + one-line description per group. */
-const MENU: Record<keyof typeof GROUPS, [key: string, desc: string]> = {
-	web: ["w", "search the web, read pages"],
-	research: ["r", "search papers + datasets (vaults only)"],
-	obsidian: ["o", "read + write your Obsidian notes"],
-	lens: ["l", "jump to symbols, see code errors"],
-	subagents: ["s", "hand work to background agents"],
-	ask: ["a", "ask you multiple-choice questions"],
-};
-
-const MENU_SHORTCUT = "ctrl+space";
-
-/** Groups on in a fresh session. */
-const DEFAULT_ON = ["ask"];
-
-const ENTRY = "loadout";
+const isHidden = (name: string) => HIDDEN.some((p) => name.startsWith(p));
 
 export default function (pi: ExtensionAPI) {
-	let on = new Set<string>(DEFAULT_ON);
-
-	const groupOf = (tool: string) =>
-		NAMES.find((g) => GROUPS[g].some((p) => tool.startsWith(p)));
-
-	/** Groups that have at least one registered tool in this session. */
-	const present = () => {
-		const names = new Set<string>();
-		for (const t of pi.getAllTools()) {
-			const g = groupOf(t.name);
-			if (g) names.add(g);
-		}
-		return NAMES.filter((g) => names.has(g));
-	};
-
-	function apply() {
-		const active = new Set(pi.getActiveTools());
-		for (const t of pi.getAllTools()) {
-			const g = groupOf(t.name);
-			if (!g) continue; // core: leave as the owning extension set it
-			if (on.has(g)) active.add(t.name);
-			else active.delete(t.name);
-		}
-		pi.setActiveTools([...active]);
-	}
-
-	function setHeader(ctx: ExtensionContext) {
-		if (ctx.mode !== "tui") return;
-		ctx.ui.setHeader((_tui, theme) => ({
-			invalidate() {},
-			render(): string[] {
-				const groups = present();
-				const loaded = ["core", ...groups.filter((g) => on.has(g))];
-				const off = groups.filter((g) => !on.has(g));
-				let line = `${theme.fg("dim", "tools")}  ${theme.fg("accent", loaded.join(" "))}`;
-				if (off.length) line += theme.fg("dim", `  ·  off: ${off.join(" ")}   ${MENU_SHORTCUT}`);
-				return [line];
-			},
-		}));
-	}
-
-	function change(groups: string[], enable: boolean) {
-		const known = present();
-		const bad = groups.filter((g) => !known.includes(g));
-		const ok = groups.filter((g) => known.includes(g));
-		for (const g of ok) {
-			if (enable) on.add(g);
-			else on.delete(g);
-		}
-		apply();
-		pi.appendEntry(ENTRY, { on: [...on] });
-		return { ok, bad, known };
-	}
-
-	pi.on("session_start", async (_event, ctx) => {
-		// Restore this branch's last loadout; a fresh session gets DEFAULT_ON.
-		on = new Set(DEFAULT_ON);
-		for (const e of ctx.sessionManager.getBranch()) {
-			if (e.type === "custom" && e.customType === ENTRY) on = new Set((e.data as { on: string[] }).on);
-		}
-		apply();
-		setHeader(ctx);
-	});
-
-	/** which-key style popup: one key per group toggles it; esc/q/enter closes. */
-	async function menu(ctx: ExtensionContext) {
-		if (ctx.mode !== "tui") return;
-		await ctx.ui.custom<void>(
-			(tui, theme, _kb, done) => ({
-				invalidate() {},
-				render(): string[] {
-					const rows = present().map((g) => {
-						const [key, desc] = MENU[g];
-						const mark = on.has(g) ? theme.fg("success", "●") : theme.fg("dim", "○");
-						return ` ${theme.fg("accent", key)}  ${mark} ${g.padEnd(10)}${theme.fg("dim", desc)}`;
-					});
-					return [
-						theme.fg("accent", " What the model may use this session"),
-						theme.fg("dim", " ● on  ○ off   (read/edit/bash always on; skills unaffected)"),
-						"",
-						...rows,
-						"",
-						theme.fg("dim", " press a letter to switch on/off · esc done"),
-					];
-				},
-				handleInput(data: string) {
-					if (data === "\x1b" || data === "q" || data === "\r") return done();
-					const g = present().find((name) => MENU[name][0] === data);
-					if (!g) return;
-					change([g], !on.has(g));
-					tui.requestRender();
-				},
-			}),
-			{ overlay: true },
-		);
-	}
-
-	pi.registerShortcut(MENU_SHORTCUT, { description: "Tool groups menu", handler: menu });
-
-	const complete = (prefix: string) => {
-		const hits = present().filter((g) => g.startsWith(prefix));
-		return hits.length ? hits.map((g) => ({ value: g, label: g })) : null;
-	};
-
-	for (const [name, enable] of [["load", true], ["unload", false]] as const) {
-		pi.registerCommand(name, {
-			description: `${enable ? "Enable" : "Disable"} a tool group: /${name} <group...>`,
-			getArgumentCompletions: complete,
-			handler: async (args, ctx) => {
-				if (enable && !args.trim()) return menu(ctx);
-				const { ok, bad, known } = change(args.split(/\s+/).filter(Boolean), enable);
-				if (bad.length || !ok.length)
-					ctx.ui.notify(`groups: ${known.join(" ")}${bad.length ? `  (unknown: ${bad.join(" ")})` : ""}`, "warning");
-			},
-		});
-	}
-
+	// Carrier for prepareLoadout; it hides its own declaration too, so the model never sees it.
 	pi.registerTool({
-		name: "load_tools",
-		label: "Load tools",
-		description:
-			`Enable an optional tool group for this session. Groups: ${NAMES.join(", ")} ` +
-			"(web = web search/fetch; research = paper databases, vaults only; obsidian = notes; " +
-			"lens = code navigation/diagnostics; subagents = delegation; ask = structured questions).",
-		promptSnippet: "Enable an optional tool group (web, research, obsidian, lens, subagents, ask) when the task needs it",
-		parameters: Type.Object({ group: Type.String({ description: "Group name" }) }),
-		async execute(_id, params) {
-			const { ok, known } = change([params.group], true);
-			const text = ok.length
-				? `Loaded ${params.group}; its tools are available from the next step.`
-				: `Unknown group "${params.group}". Available: ${known.join(", ")}`;
-			return { content: [{ type: "text", text }], details: {} };
+		name: CARRIER,
+		label: "loadout",
+		exposure: "model-only",
+		description: "Internal: hides optional tools from the declared list.",
+		parameters: Type.Object({}),
+		async execute() {
+			return { content: [{ type: "text", text: "" }], details: {} };
+		},
+		prepareLoadout: (loadout) => {
+			const names = loadout.declared.map((t) => t.name);
+			if (!names.includes("codemode")) return { hiddenDeclarations: [CARRIER] };
+			return { hiddenDeclarations: names.filter((n) => n === CARRIER || isHidden(n)) };
 		},
 	});
-}
 
+	// Before the first request: activate every optional tool (direct tools are callable only while active).
+	pi.on("session_start", async () => {
+		const active = new Set(pi.getActiveTools());
+		if (!active.has("codemode")) return;
+		for (const t of pi.getAllTools()) if (isHidden(t.name)) active.add(t.name);
+		active.add(CARRIER);
+		pi.setActiveTools([...active]);
+	});
+}

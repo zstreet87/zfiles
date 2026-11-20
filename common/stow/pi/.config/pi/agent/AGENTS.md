@@ -1,47 +1,19 @@
-# Research vault convention
+## Tools and context
 
-Every Obsidian vault has a matching paper directory: vault `<Name>` ->
-`$HOME/Library/<Name>/`.
-
-- **Creating a vault**: `new-research-project <Name>`. It scaffolds the
-  Quarto/Obsidian template and creates the matching library directory in the
-  same step, so the two cannot drift. It also resolves the vault root itself --
-  that differs per target, so do not hardcode a root or reimplement the choice.
-- **Adding a paper**: `paperctl add <title|arxiv-id|doi|url> --to <Name>`.
-  Never download a PDF by hand -- paperctl files the PDF, writes a README index
-  and BibTeX, is idempotent, and records link-only papers it cannot fetch.
-- **Citing**: `paperctl bib --folder <Name> --out <vault>/library.bib`, then
-  `bibliography: [references.bib, library.bib]` in `_quarto.yml`.
-  `references.bib` is Better BibTeX's auto-export -- never hand-edit it.
-- **Publishing**: `publish-post <vault>/drafts/<file>.qmd` (blog),
-  `publish-confluence <file.md>` (wiki, needs `CONFLUENCE_*` in the
-  environment). Both run `publish-lint` first and refuse anything a reader on
-  another machine can't use -- local paths, `[[Note]]` links, local images.
-  Use real `https://` links or plain text; never work around the gate.
-
-Resolve paths, never assume them: `obsidian-vault path <Name>` for a vault,
-`$HOME/Library` for the library. Anything target-specific belongs inside the
-script that needs it, behind a runtime check -- not in this file, which is
-loaded on every machine.
-
-## Paths in this repo
-
-This repo is public. Do not write absolute paths containing a username,
-employer, internal hostname, or work directory into any tracked file -- use
-`$HOME`, `${XDG_*}`, or a discovery command. Employer-specific tooling and
-tenant identifiers stay out of the repo entirely: `$HOME/.local/bin` and
-`~/.config/shell/secrets.env` are untracked and are where they go.
-
-`common/githooks/pre-push` blocks the identifiers in
-`${XDG_CONFIG_HOME:-$HOME/.config}/zfiles/leak-patterns`, but treat it as a
-backstop, not permission.
+- **Optional tools** are callable only from `codemode`. They cover web
+  search and fetch, Obsidian, paper databases, and code navigation and
+  diagnostics (lens). Find them with `searchTools("web search")`, then call
+  `tools.<name>()`.
+- **Batching:** use `codemode` to batch independent calls, and filter large
+  output so only what matters reaches the context.
 
 ## Writing code
 
-Before writing or reviewing non-trivial Python, C, C++, Rust, shell or
-performance-critical code, load the `code-style` skill and read only the
-reference file for that language. The repository's own conventions take
-precedence over the skill.
+- **Check edits:** after editing code, run `code-check`. It lints the changed
+  files and prints only findings, tagged with rule IDs. Fix them.
+- **Judgement calls** such as design, ownership or data layout: load the
+  `code-style` skill and read only the reference file for that language. The
+  repository's own conventions take precedence.
 
 Shell rules that apply even without the skill. Every script must pass
 `shellcheck` (if it is not installed, run

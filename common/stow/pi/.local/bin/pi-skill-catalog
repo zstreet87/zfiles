@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""pi-skill-catalog -- keep rarely used skills out of Pi's prompt without losing them.
+
+Pi lists every skill's description in every request. Skills named in
+$PI_CODING_AGENT_DIR/skill-catalog.json are instead:
+  1. excluded in settings.json (`"-<dir>"` in `skills` for skill directories,
+     `"!**/<name>"` in the owning npm package's `skills` filter), and
+  2. listed in one generated skill, skills/skill-catalog/SKILL.md, whose
+     description carries each one's trigger phrase and whose body gives its
+     SKILL.md path, so the model still finds and reads it when a task matches.
+
+This script owns every `-` skill entry and `!**/` package skill filter in
+settings.json and rewrites them from the catalog on each run (idempotent).
+
+  pi-skill-catalog          # sync exclusions and regenerate the catalog skill
+  pi-skill-catalog --check  # exit 1 if a catalog entry names no installed skill
+"""
+
+import json
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+AGENT = Path(os.environ.get("PI_CODING_AGENT_DIR") or Path.home() / ".config/pi/agent")
+SETTINGS = AGENT / "settings.json"
+CATALOG = AGENT / "skill-catalog.json"
+OUT = AGENT / "skills/skill-catalog/SKILL.md"
+SKILL_DIRS = [Path.home() / ".agents/skills", AGENT / "skills"]
+NPM = AGENT / "npm/node_modules"
+DESC_MAX = 1024  # Pi rejects longer skill descriptions
+LEAD = ("More skills, hidden to save context. When a task involves any of these, read this "
+        "file, then the named SKILL.md: ")
+
+
+def description(md: Path) -> str:
+    """Return the `description` front-matter value of a SKILL.md, folding block scalars."""
+    m = re.match(r"---\n(.*?)\n---", md.read_text(encoding="utf-8"), re.S)
+    lines = (m.group(1) if m else "").splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("description:"):
+            val = line.split(":", 1)[1].strip()
+            if val in ("|", ">", "|-", ">-", ""):
+                val = " ".join(x.strip() for x in lines[i + 1:] if x.startswith((" ", "\t")))
+            return val.strip("'\"")
+    return ""
+
+
+def npm_package(md: Path) -> str | None:
+    """Return the `npm:<name>` source of the package containing md, if any."""
+    try:
+        parts = md.relative_to(NPM).parts
+    except ValueError:
+        return None
+    return "npm:" + "/".join(parts[:2] if parts[0].startswith("@") else parts[:1])
+
+
+def locate(name: str) -> Path | None:
+    """Find the SKILL.md of an installed skill by name: skill dirs first, then npm packages."""
+    for root in SKILL_DIRS:
+        if (root / name / "SKILL.md").is_file():
+            return root / name / "SKILL.md"
+    for md in NPM.glob(f"**/skills/{name}/SKILL.md"):
+        if md.relative_to(NPM).parts.count("node_modules") == 0:
+            return md
+    return None
+
+
+def sync_settings(settings: dict, found: dict[str, Path]) -> dict:
+    """Rewrite the owned exclusions in settings so they hide exactly the catalog's skills."""
+    skills = [s for s in settings.get("skills", []) if not s.startswith("-")]
+    filters: dict[str, list[str]] = {}
+    for name, md in found.items():
+        pkg = npm_package(md)
+        if pkg:
+            filters.setdefault(pkg, []).append(f"!**/{name}")
+        else:
+            skills.append("-" + str(md.parent).replace(str(Path.home()), "~", 1))
+    packages = []
+    for entry in settings.get("packages", []):
+        obj = {"source": entry} if isinstance(entry, str) else dict(entry)
+        kept = [f for f in obj.get("skills", []) if not f.startswith("!**/")]
+        want = kept + filters.get(obj["source"], [])
+        if want or ("skills" in obj and not obj["skills"]):  # `[]` means "load none": keep it
+            obj["skills"] = want or obj["skills"]
+        else:
+            obj.pop("skills", None)
+        packages.append(obj["source"] if list(obj) == ["source"] else obj)
+    settings["skills"] = skills
+    settings["packages"] = packages
+    if not skills:
+        settings.pop("skills")
+    return settings
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Replace path with text without ever leaving a half-written file."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def main() -> int:
+    catalog = {k: v for k, v in json.loads(CATALOG.read_text()).items() if not k.startswith("_")}
+    found = {n: md for n in catalog if (md := locate(n))}
+    missing = sorted(set(catalog) - set(found))
+    for n in missing:
+        print(f"pi-skill-catalog: not installed, skipped: {n}", file=sys.stderr)
+    if "--check" in sys.argv:
+        return 1 if missing else 0
+
+    old = SETTINGS.read_text()
+    new = json.dumps(sync_settings(json.loads(old), found), indent=2) + "\n"
+    if new != old:
+        write_atomic(SETTINGS, new)
+
+    hints = [h for h in dict.fromkeys(catalog[n] for n in found) if h]
+    desc = LEAD + "; ".join(hints) + "."
+    if len(desc) > DESC_MAX:
+        print(f"pi-skill-catalog: description is {len(desc)} chars (max {DESC_MAX}); "
+              f"shorten trigger phrases in {CATALOG}", file=sys.stderr)
+        return 1
+    body = "\n".join(f"- **{n}** — `{md}`\n  {description(md)}" for n, md in sorted(found.items()))
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(OUT, f"---\nname: skill-catalog\ndescription: {json.dumps(desc, ensure_ascii=False)}\n"
+                 "---\n\n# Skill catalog\n\nGenerated by `pi-skill-catalog` from "
+                 f"`{CATALOG.name}`; do not edit. To use a skill, `read` its SKILL.md and follow "
+                 "it as if it had been listed.\n\n" + body + "\n")
+    print(f"pi-skill-catalog: {len(found)} skills hidden, catalog {len(desc)} chars")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

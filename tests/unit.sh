@@ -425,5 +425,35 @@ rm -rf "$T/planhome"; plan >/dev/null; [[ -e $T/planhome ]] && bad "bootstrap --
 # Shared steps branch on the contract, never on which target they run for.
 grep -nE '\$(REMOTE|OMARCHY|WSL)\b|TARGET ?==' common/setup.sh && bad "common/setup.sh branches on the target"
 
+# --- pi-skill-catalog: hides catalog skills, keeps the rest, stays idempotent ---
+PA=$T/pi/agent
+mkdir -p "$T/pi/home/.agents/skills/keep" "$T/pi/home/.agents/skills/hide" "$PA/npm/node_modules/@x/pkg/skills/extra"
+for s in keep hide; do printf -- '---\nname: %s\ndescription: The %s skill.\n---\n' $s $s > "$T/pi/home/.agents/skills/$s/SKILL.md"; done
+printf -- '---\nname: extra\ndescription: >\n  Folded\n  text.\n---\n' > "$PA/npm/node_modules/@x/pkg/skills/extra/SKILL.md"
+echo '{"hide": "hide trigger", "extra": "extra trigger", "gone": "x"}' > "$PA/skill-catalog.json"
+echo '{"packages": ["npm:@x/pkg", {"source": "npm:y", "skills": []}], "skills": ["+/keep/me"]}' > "$PA/settings.json"
+psc() { env -i HOME="$T/pi/home" PI_CODING_AGENT_DIR="$PA" PATH=/usr/bin:/bin "$REPO/common/stow/pi/.local/bin/pi-skill-catalog" "$@"; }
+psc >/dev/null 2>&1 || bad "pi-skill-catalog failed"
+eq "catalog skill exclusions" "$(jq -c .skills "$PA/settings.json")" '["+/keep/me","-~/.agents/skills/hide"]'
+eq "catalog package filter" "$(jq -c '.packages[0]' "$PA/settings.json")" '{"source":"npm:@x/pkg","skills":["!**/extra"]}'
+eq "catalog keeps load-none filter" "$(jq -c '.packages[1]' "$PA/settings.json")" '{"source":"npm:y","skills":[]}'
+grep -q 'hide trigger; extra trigger' "$PA/skills/skill-catalog/SKILL.md" || bad "catalog description lacks triggers"
+grep -q 'Folded text.' "$PA/skills/skill-catalog/SKILL.md" || bad "catalog did not fold a block-scalar description"
+cp "$PA/settings.json" "$T/pi/before"; psc >/dev/null 2>&1
+cmp -s "$PA/settings.json" "$T/pi/before" || bad "pi-skill-catalog is not idempotent"
+psc --check 2>/dev/null && bad "--check passed with a missing skill"
+echo '{"extra": "x"}' > "$PA/skill-catalog.json"; psc >/dev/null 2>&1
+eq "catalog drops stale exclusions" "$(jq -c '[.skills, .packages[0]]' "$PA/settings.json")" '[["+/keep/me"],{"source":"npm:@x/pkg","skills":["!**/extra"]}]'
+
+# --- code-check: findings carry rule IDs, clean input exits 0 ----------------
+if command -v ruff >/dev/null; then
+    CC=$T/cc; mkdir -p "$CC" && git -C "$CC" init -q
+    printf 'def f(x=[]):\n    return x\n' > "$CC/a.py"; printf 'x = 1\n' > "$CC/b.py"
+    out=$(cd "$CC" && "$REPO/common/stow/scripts/.local/bin/code-check" a.py); rc=$?
+    eq "code-check exit on findings" "$rc" 1
+    grep -q '^a.py:1: \[ruff B006\]' <<<"$out" || bad "code-check lost the rule ID: $out"
+    (cd "$CC" && "$REPO/common/stow/scripts/.local/bin/code-check" b.py >/dev/null) || bad "code-check flagged clean code"
+fi
+
 ((fails)) && { echo "unit: $fails failed" >&2; exit 1; }
 echo "unit: ok"

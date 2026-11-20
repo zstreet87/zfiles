@@ -9,9 +9,15 @@
     "with the active Omarchy theme and pi hot-reloads.",
     "Providers and credentials belong in models.json, which is also untracked.",
     "feynman is installed but loads nothing here; vaults enable it via .pi/settings.json (vault-template).",
-    "defaultTools entries are merged into settings.json by setup.sh (codemode: scripts filter tool output before it reaches context)."
+    "models.json: the work Anthropic proxy rejects forceAdaptiveThinking (output_config) and mid-conversation",
+    "tool changes (tool_addition), so never set those compat flags there; the tool set must stay fixed per",
+    "session or every change rewrites the whole prompt cache. loadout.ts keeps it fixed.",
+    "defaultTools entries are merged into settings.json by setup.sh, keeping local additions.",
+    "Skill exclusions are owned by pi-skill-catalog (driven by skill-catalog.json); do not add them here."
   ],
-  "defaultTools": ["+codemode"],
+  "defaultTools": [
+    "+codemode"
+  ],
   "packages": [
     "npm:pi-web-access",
     "npm:pi-lens",
