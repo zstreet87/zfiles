@@ -561,7 +561,9 @@ unbounded. So the window is claimed instead. `caps.ahk` calls `GET /launch`
 *before* sending the launcher chord, while the intended workspace is still
 focused; the daemon records it and a watcher thread on GlazeWM's
 `window_managed` event stream moves the next newly managed window there and
-follows it. An already-running app emits no `window_managed` event, so
+follows it -- and every later window of that same process until the claim
+expires, because apps like Slack show a splash window first and their real
+window second. An already-running app emits no `window_managed` event, so
 activating an existing window is untouched, and a claim expires after 15s so an
 abandoned launcher can't capture something unrelated a minute later. Daemon
 down, and `Caps+Space` is exactly the plain launcher chord it always was.
