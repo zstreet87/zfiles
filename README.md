@@ -491,7 +491,10 @@ Configs are **copied** to the Windows side, not symlinked across
 `\\wsl.localhost`: the logon tasks run when the distro may not be up, and a UNC
 path there would either fail or force the distro to boot just to read a config.
 So editing `wsl/windows/*` takes a bootstrap re-run to reach Windows. An unmanaged
-file already at the destination is backed up once to `<name>.zfiles-bak`.
+file already at the destination is backed up once to `<name>.zfiles-bak`. Each
+installed file gets a `<name>.zfiles-sha256` record; a live copy edited in place
+is left alone with a warning rather than overwritten -- move the edit into the
+repo, or delete the live file to take the repo version.
 
 Both the Caps Lock remap (`zfiles-caps`) and GlazeWM (`zfiles-glazewm`) run as
 logon tasks at highest privileges, so they also apply over elevated windows and
